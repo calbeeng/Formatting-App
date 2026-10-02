@@ -97,6 +97,8 @@ def run_style(run: Run, strip_colour: bool) -> tuple[dict, list[str]]:
         style["baselineOffset"] = "SUBSCRIPT"
     if run.color and not strip_colour:
         style["foregroundColor"] = {"color": {"rgbColor": hex_to_rgb(run.color)}}
+    if run.highlight and not strip_colour:
+        style["backgroundColor"] = {"color": {"rgbColor": hex_to_rgb(run.highlight)}}
     return style, list(style.keys())
 
 
@@ -128,7 +130,8 @@ def text_requests(
         for r in b.runs:
             t = _clean(r.text)
             if t:
-                runs.append((len(text), Run(t, r.bold, r.italic, r.underline, r.superscript, r.subscript, r.color)))
+                runs.append((len(text), Run(t, r.bold, r.italic, r.underline, r.superscript, r.subscript,
+                                            r.color, r.highlight)))
                 text += t
         paras.append((b, text, runs))
     if not paras:
@@ -285,13 +288,33 @@ def segments(blocks: list[Block]) -> list[tuple[str, list[Block]]]:
     for b in blocks:
         if b.kind in ("table", "image"):
             out.append((b.kind, [b]))
-        elif not b.text.strip():
+        elif not b.text.strip() and not b.spacer:
             continue
         elif out and out[-1][0] == "text" and len(out[-1][1]) < MAX_BLOCKS_PER_TEXT_SEGMENT:
             out[-1][1].append(b)
         else:
             out.append(("text", [b]))
     return out
+
+
+def cell_background_requests(table_start: int, cells, strip_colour: bool) -> list[dict]:
+    """Cell shading (e.g. coloured header cells), unless colour is stripped."""
+    if strip_colour:
+        return []
+    reqs = []
+    for c in cells:
+        if not c.background:
+            continue
+        reqs.append({"updateTableCellStyle": {
+            "tableRange": {
+                "tableCellLocation": {"tableStartLocation": {"index": table_start},
+                                      "rowIndex": c.row, "columnIndex": c.col},
+                "rowSpan": 1, "columnSpan": 1,
+            },
+            "tableCellStyle": {"backgroundColor": {"color": {"rgbColor": hex_to_rgb(c.background)}}},
+            "fields": "backgroundColor",
+        }})
+    return reqs
 
 
 def table_width_requests(table_start: int, col_widths: list[float], n_cols: int,

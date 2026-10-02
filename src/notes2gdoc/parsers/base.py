@@ -29,9 +29,21 @@ def get_parser(path: str | Path) -> Parser:
         from .pdf import PdfParser
 
         return PdfParser()
-    raise ParseError(
-        f"Unsupported file type '{suffix}'. PDF is supported now; Word and PowerPoint are coming later."
-    )
+    if suffix == ".docx":
+        from .docx_parser import DocxParser
+
+        return DocxParser()
+    if suffix == ".pptx":
+        from .pptx_parser import PptxParser
+
+        return PptxParser()
+    if suffix in (".doc", ".ppt"):
+        new = suffix + "x"
+        raise ParseError(
+            f"This is an old-style {suffix} file. Open it in Word/PowerPoint and use "
+            f"File → Save As → {new}, then open the {new} file here."
+        )
+    raise ParseError(f"Unsupported file type '{suffix}'. Use a PDF, Word (.docx) or PowerPoint (.pptx) file.")
 
 
 def parse_file(path: str | Path, settings: Settings | None = None) -> Document:

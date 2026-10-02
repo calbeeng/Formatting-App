@@ -51,7 +51,8 @@ from .outline_tree import OutlineTree
 from .preview_html import document_html
 from .settings_dialog import SettingsDialog
 
-SUPPORTED = (".pdf",)
+SUPPORTED = (".pdf", ".docx", ".pptx")
+FILE_FILTER = "Study files (*.pdf *.docx *.pptx);;PDF (*.pdf);;Word (*.docx);;PowerPoint (*.pptx)"
 SETUP_HELP = (
     "This copy of the app needs a one-time setup: the Google “client file” you "
     "downloaded when following SETUP.md (it’s usually called client_secret_….json).\n\n"
@@ -97,7 +98,7 @@ def _describe_error(exc: Exception, prefix: str) -> str:
 
 class DropZone(QLabel):
     def __init__(self):
-        super().__init__("Drag a PDF here\n\nor click “Open file…” above")
+        super().__init__("Drag a PDF, Word or PowerPoint file here\n\nor click “Open file…” above")
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet(
             "QLabel { border: 2px dashed #9AA0A6; border-radius: 12px; color: #5F6368;"
@@ -346,7 +347,7 @@ class MainWindow(QMainWindow):
     # File selection, outline and preview
     # =========================================================================
     def choose_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose a study file", "", "PDF files (*.pdf)")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a study file", "", FILE_FILTER)
         if path:
             self.load(Path(path))
 
@@ -518,7 +519,7 @@ class MainWindow(QMainWindow):
         from .. import gdocs
 
         if not self.doc:
-            QMessageBox.information(self, "No file yet", "Open a PDF first.")
+            QMessageBox.information(self, "No file yet", "Open a PDF, Word or PowerPoint file first.")
             return
         if not any(b.selected for b in self.doc.blocks):
             QMessageBox.information(self, "Nothing ticked", "Tick at least one item in the outline on the left.")

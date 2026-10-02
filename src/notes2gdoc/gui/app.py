@@ -100,8 +100,33 @@ def self_test() -> int:
         drive_json = Path(discovery_cache.__file__).parent / "documents" / "drive.v3.json"
         assert docs_json.exists() and drive_json.exists(), "Google API descriptions not bundled"
 
+    def office_files():
+        import docx
+        import pptx
+
+        from ..config import Settings
+        from ..parsers import parse_file
+
+        tmp = Path(tempfile.gettempdir())
+        d = docx.Document()
+        d.add_heading("Heading", level=1)
+        d.add_paragraph("A bullet", style="List Bullet")
+        d.save(tmp / "notes2gdoc-self-test.docx")
+        kinds = [b.kind for b in parse_file(tmp / "notes2gdoc-self-test.docx", Settings()).blocks]
+        assert kinds == ["heading", "bullet"], kinds
+
+        prs = pptx.Presentation()
+        prs.slides.add_slide(prs.slide_layouts[0]).shapes.title.text = "Title slide"
+        s = prs.slides.add_slide(prs.slide_layouts[1])
+        s.shapes.title.text = "Slide title"
+        s.placeholders[1].text_frame.text = "A point"
+        prs.save(tmp / "notes2gdoc-self-test.pptx")
+        kinds = [b.kind for b in parse_file(tmp / "notes2gdoc-self-test.pptx", Settings()).blocks if b.selected]
+        assert kinds == ["heading", "bullet"], kinds
+
     results.append(check("Qt window", qt_window))
     results.append(check("read a PDF", parse_pdf))
+    results.append(check("read Word and PowerPoint", office_files))
     results.append(check("preview", preview) if "doc" in state else False)
     results.append(check("Google libraries", google_libraries))
 

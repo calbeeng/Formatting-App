@@ -1,7 +1,7 @@
 # Notes to Google Docs
 
-A small desktop app (Mac and Windows) that copies study notes from PDFs into a
-Google Doc while keeping the structure: heading numbering like "(ii)", bullet
+A small desktop app (Mac and Windows) that copies study notes from **PDF, Word
+(.docx) and PowerPoint (.pptx)** files into a Google Doc while keeping the structure: heading numbering like "(ii)", bullet
 nesting, bold/italic/underline, superscripts, colour (blue = non-essential
 readings stays blue), tables and diagrams. The formatting comes from *your*
 Google Doc's own heading and text styles.
@@ -62,7 +62,7 @@ it → **Pin to Start** or **Send to → Desktop** for a shortcut.
 
 ## Using it
 
-1. Click **Open file…**, or drag a PDF onto the window.
+1. Click **Open file…**, or drag a PDF, Word or PowerPoint file onto the window.
 2. In the outline on the left, untick anything you don't want (unticking a
    heading unticks everything under it), or use **Pages … to …**. The preview
    on the right shows exactly what will be added.
@@ -73,7 +73,20 @@ it → **Pin to Start** or **Send to → Desktop** for a shortcut.
 **Settings…** lets you choose which Google Docs style each kind of heading uses
 (e.g. "(a)" headings as Heading 3), and switch justified text and colour on or off.
 
-Scanned PDFs (pictures of pages with no selectable text) aren't supported yet.
+**What comes across from each kind of file**
+
+- **PDF**: structure is worked out from the layout (fonts, numbering, indents).
+  Flowcharts become pictures; scanned PDFs (pictures of pages with no
+  selectable text) aren't supported.
+- **Word**: Word's own heading levels (including custom styles based on
+  Heading 1-6), real list levels, highlights, text colours, tables (with
+  coloured cells and merged cells), pictures and equations. Pictures inside
+  tables are placed just after the table. Single blank lines between sections are kept.
+- **PowerPoint**: slide titles, bullets and their levels, two-column layouts
+  (left column first), tables, pictures and equations. Diagrams built from
+  boxes and arrows are redrawn as a picture (a close approximation).
+  Charts and SmartArt are left out, with a note in the app. Old `.doc`/`.ppt`
+  files need saving as `.docx`/`.pptx` first.
 
 ---
 

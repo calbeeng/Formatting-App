@@ -40,9 +40,12 @@ class Run:
     subscript: bool = False
     # "#RRGGBB", or None for the default (black) text colour.
     color: str | None = None
+    # Highlight ("#RRGGBB" background behind the text), e.g. from Word
+    highlight: str | None = None
 
     def style_key(self) -> tuple:
-        return (self.bold, self.italic, self.underline, self.superscript, self.subscript, self.color)
+        return (self.bold, self.italic, self.underline, self.superscript, self.subscript, self.color,
+                self.highlight)
 
     def same_style(self, other: "Run") -> bool:
         return self.style_key() == other.style_key()
@@ -55,6 +58,7 @@ class TableCell:
     blocks: list["Block"] = field(default_factory=list)  # paragraphs/bullets inside the cell
     rowspan: int = 1
     colspan: int = 1
+    background: str | None = None  # "#RRGGBB" cell shading
 
     @property
     def text(self) -> str:
@@ -106,6 +110,9 @@ class Block:
     # kind="table": the table; kind="image": the picture (e.g. a flowchart)
     table: Table | None = None
     image: Image | None = None
+    # A deliberate blank line (from a Word document), kept to separate sections.
+    # Ticked/unticked along with the item before it.
+    spacer: bool = False
 
     @property
     def text(self) -> str:

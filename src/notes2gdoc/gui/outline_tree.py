@@ -70,6 +70,8 @@ class OutlineTree(QTreeWidget):
 
         items: list[tuple[QTreeWidgetItem, Block]] = []
         for i, b in enumerate(doc.blocks):
+            if b.spacer:
+                continue  # blank lines aren't listed; they follow the item above
             item = QTreeWidgetItem([_label(b, settings), str(b.page)])
             item.setData(0, ROLE_INDEX, i)
             item.setToolTip(0, b.text[:500] or b.kind)
@@ -151,10 +153,18 @@ class OutlineTree(QTreeWidget):
             b = self.doc.blocks[item.data(0, ROLE_INDEX)]
             ticked = item.checkState(0) != Qt.Unchecked
             b.selected = ticked and first <= b.page <= last
+        # Blank lines go with the item before them
+        previous = False
+        for b in self.doc.blocks:
+            if b.spacer:
+                b.selected = previous
+            else:
+                previous = b.selected
         self.selection_changed.emit()
 
     def counts(self) -> tuple[int, int]:
         """(ticked, total) blocks."""
         if not self.doc:
             return 0, 0
-        return sum(1 for b in self.doc.blocks if b.selected), len(self.doc.blocks)
+        real = [b for b in self.doc.blocks if not b.spacer]
+        return sum(1 for b in real if b.selected), len(real)

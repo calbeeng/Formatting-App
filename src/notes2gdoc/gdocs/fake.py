@@ -229,6 +229,19 @@ class FakeDoc:
         info["columnWidths"] = widths
         marker.image = info
 
+    def _updateTableCellStyle(self, b):
+        loc = b["tableRange"]["tableCellLocation"]
+        pos = self._pos(loc["tableStartLocation"]["index"])
+        if not (0 <= pos < len(self.seq)) or self.seq[pos].c != TABLE_START:
+            raise FakeDocsError("tableStartLocation is not the start of a table")
+        marker = self.seq[pos]
+        info = dict(marker.image or {})
+        shading = dict(info.get("cellBackgrounds", {}))
+        rgb = b["tableCellStyle"]["backgroundColor"]["color"]["rgbColor"]
+        shading[(loc["rowIndex"], loc["columnIndex"])] = rgb
+        info["cellBackgrounds"] = shading
+        marker.image = info
+
     def _mergeTableCells(self, b):
         self.merges.append(b["tableRange"])
 

@@ -398,3 +398,31 @@ def test_table_cells_and_table_line_flush_left():
     before = content[t_i - 1]["paragraph"]
     assert "bullet" not in before and before["paragraphStyle"]["indentStart"]["magnitude"] == 0
     assert "inheritedIndent" not in content[t_i]["table"]
+
+
+def test_highlight_cell_colour_and_blank_lines():
+    table = Table(1, 2, [TableCell(0, 0, [Block("paragraph", [Run("Header")])], background="#9CC2E5"),
+                         TableCell(0, 1, [Block("paragraph", [Run("Plain")])])])
+    blocks = [
+        Block("paragraph", [Run("(1) Purpose", bold=True, highlight="#FFFF00"), Run(": text")]),
+        Block("paragraph", spacer=True),
+        Block("paragraph", [Run("After a blank line")]),
+        Block("table", table=table),
+    ]
+    doc, result = append(blocks)
+    ps = paras(doc)
+    texts = [p[2] for p in ps]
+    i = texts.index("(1) Purpose: text")
+    assert texts[i + 1] == "" and texts[i + 2] == "After a blank line"   # blank line kept
+    runs = dict(ps[i][3])
+    assert runs["(1) Purpose"]["backgroundColor"]["color"]["rgbColor"]["red"] == 1.0
+    t = next(c["table"] for c in doc.to_json()["body"]["content"] if "table" in c)
+    assert set(t["cellBackgrounds"]) == {(0, 0)}
+    # Strip colour also strips highlights and cell shading
+    doc2, result2 = append(blocks, settings=Settings(strip_colour=True))
+    reqs = all_requests(result2)
+    assert not any("updateTableCellStyle" in r for r in reqs)
+    for r in reqs:
+        if "updateTextStyle" in r:
+            style = r["updateTextStyle"]["textStyle"]
+            assert "backgroundColor" not in style and "foregroundColor" not in style

@@ -36,12 +36,17 @@ def run_html(run: Run, strip_colour: bool) -> str:
         styles.append("vertical-align:sub")
     if run.color and not strip_colour:
         styles.append(f"color:{run.color}")
+    if run.highlight and not strip_colour:
+        styles.append(f"background-color:{run.highlight}")
     return f'<span style="{";".join(styles)}">{text}</span>' if styles else text
 
 
 def _cell_html(blocks: list[Block], settings: Settings) -> str:
     parts = []
     for b in blocks:
+        if b.spacer:
+            parts.append("<p>&nbsp;</p>")
+            continue
         inner = "".join(run_html(r, settings.strip_colour) for r in b.runs)
         if b.kind == "bullet":
             glyph = BULLET_GLYPHS[b.level % len(BULLET_GLYPHS)]
@@ -62,13 +67,16 @@ def table_html(block: Block, settings: Settings) -> str:
                 continue
             span = f' colspan="{cell.colspan}"' if cell.colspan > 1 else ""
             span += f' rowspan="{cell.rowspan}"' if cell.rowspan > 1 else ""
-            cells.append(f'<td valign="top"{span}>{_cell_html(cell.blocks, settings)}</td>')
+            bg = f' bgcolor="{cell.background}"' if cell.background and not settings.strip_colour else ""
+            cells.append(f'<td valign="top"{span}{bg}>{_cell_html(cell.blocks, settings)}</td>')
         rows.append("<tr>" + "".join(cells) + "</tr>")
     return ('<table border="1" cellspacing="0" cellpadding="5" width="100%" '
             'style="border-color:#999999; margin-top:8px; margin-bottom:8px">' + "".join(rows) + "</table>")
 
 
 def block_html(block: Block, settings: Settings, show_notes: bool, image_name: str = "") -> str:
+    if block.spacer:
+        return "<p>&nbsp;</p>"
     inner = "".join(run_html(r, settings.strip_colour) for r in block.runs)
     align = "text-align: justify;" if settings.justify_text else ""
     note = ""

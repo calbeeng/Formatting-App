@@ -11,7 +11,7 @@ from platformdirs import user_config_dir
 APP_NAME = "notes2gdoc"
 
 # Allowed values in the heading map.
-NAMED_STYLES = ("HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "NORMAL_TEXT")
+NAMED_STYLES = ("HEADING_1", "HEADING_2", "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6", "NORMAL_TEXT")
 
 DEFAULT_HEADING_MAP = {
     "decimal": "HEADING_1",      # "1.", "2." ...
@@ -20,6 +20,13 @@ DEFAULT_HEADING_MAP = {
     "slide_title": "HEADING_2",  # title of each slide in a slide deck
     "section_title": "HEADING_1",   # section divider slide ("Pre-Acquisition Steps")
     "slide_subtitle": "HEADING_3",  # bold line just under a slide title
+    # Word documents: Word's own heading levels
+    "word_h1": "HEADING_1",
+    "word_h2": "HEADING_2",
+    "word_h3": "HEADING_3",
+    "word_h4": "HEADING_4",
+    "word_h5": "HEADING_5",
+    "word_h6": "HEADING_6",
 }
 
 

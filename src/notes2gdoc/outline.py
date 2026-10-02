@@ -6,7 +6,8 @@
     Extra Readings:                          <- normal paragraph
 
 Inline styles (unless plain=True): **bold**, *italic*, __underline__,
-^{superscript}, _{subscript}, and {#00B0F0|coloured text}.
+^{superscript}, _{subscript}, {#00B0F0|coloured text} and {hl #FFFF00|highlighted text}.
+Blank lines kept from Word documents show as empty lines.
 Unticked blocks are prefixed with "(skipped) ".
 """
 
@@ -35,6 +36,8 @@ def render_run(run: Run, strip_colour: bool = False) -> str:
         core = f"**{core}**"
     if run.color and not strip_colour:
         core = f"{{{run.color}|{core}}}"
+    if run.highlight and not strip_colour:
+        core = f"{{hl {run.highlight}|{core}}}"
     return lead + core + trail
 
 
@@ -60,6 +63,8 @@ def _render_table(block: Block, settings: Settings, plain: bool) -> str:
 
 
 def render_block(block: Block, settings: Settings, plain: bool = False) -> str:
+    if block.spacer:
+        return "" if block.selected else "(skipped)"
     if block.kind == "table":
         line = _render_table(block, settings, plain)
         return line if block.selected else "(skipped) " + line

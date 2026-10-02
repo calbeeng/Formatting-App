@@ -260,6 +260,7 @@ class AppendJob:
         # Full page width, in the source's column proportions
         reqs: list[dict] = writer.table_width_requests(
             table_el["startIndex"], t.col_widths, t.n_cols, self._page_width)
+        reqs += writer.cell_background_requests(table_el["startIndex"], t.cells, self.settings.strip_colour)
         # The empty line Docs leaves after a table copies the style of the
         # paragraph the table was inserted into (maybe a bullet); make it plain.
         after = target.element_starting_at(doc, table_el["endIndex"])
@@ -271,7 +272,9 @@ class AppendJob:
         if before and "paragraph" in before and not target.paragraph_text(before).strip():
             reqs.append(writer.zero_indent_request(before["startIndex"], before["endIndex"]))
         for cell in sorted(t.cells, key=lambda c: (c.row, c.col), reverse=True):
-            blocks = [b for b in cell.blocks if b.text.strip()]
+            blocks = [b for b in cell.blocks if b.text.strip() or b.spacer]
+            while blocks and blocks[-1].spacer:
+                blocks.pop()
             if not blocks:
                 continue
             try:
