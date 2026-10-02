@@ -35,6 +35,7 @@ from ..model import Block, Document, Image, Run, Table, TableCell, normalise_whi
 from ..numbering import int_to_roman
 from .base import ParseError
 from .images import to_png
+from .symbols import fix_symbols
 from .pdf.structure import strip_uniform_style
 
 try:  # python-docx is only needed for Word files
@@ -325,6 +326,7 @@ class DocxParser:
                 text = r.text
                 if not text:
                     continue
+                text = fix_symbols(text, r.font.name)  # Symbol-font letters, e.g. "b" shown as β
                 runs.append(Run(
                     text,
                     bold=bool(self._eff(r, p, "bold")),

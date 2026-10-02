@@ -46,6 +46,9 @@ def deck(tmp_path_factory):
         r3 = p.add_run()
         r3.text = "rd"
         r3._r.get_or_add_rPr().set("baseline", "30000")
+        r4 = p.add_run()
+        r4.text = " s"
+        r4.font.name = "Symbol"  # displays as σ
 
     sec = prs.slides.add_slide(prs.slide_layouts[2])  # "Section Header"
     sec.shapes.title.text = "Part Two"
@@ -98,6 +101,7 @@ def test_titles_merged_and_bullets(deck):
     styled = next(b for b in deck.blocks if b.text.startswith("Coloured"))
     assert styled.runs[0].color == "#0070C0"
     assert [r.text for r in styled.runs if r.superscript] == ["rd"]
+    assert styled.text.endswith("σ")
 
 
 def test_section_header(deck):
@@ -131,7 +135,9 @@ def test_capital_allocation_sample():
     assert find(doc, "Overview", "heading").style_key == "slide_title"          # text-box title
     order = [b.text for b in doc.blocks if b.page == 5]
     assert order.index("High") < order.index("Less willing to take on more risks.") < order.index("Low")
-    assert find(doc, "Would not invest in zero risk premium securities").text.endswith("“fair games”.")
+    wrapped = find(doc, "Would not invest in zero risk premium securities")
+    nxt = doc.blocks[doc.blocks.index(wrapped) + 1]
+    assert nxt.text == "“fair games”." and nxt.kind == "paragraph" and nxt.level == wrapped.level + 1
     assert "→" in find(doc, "Expected profits is zero").text
     assert any(b.kind == "image" and "redrawn" in b.note and b.page == 21 for b in doc.blocks)
     assert not any(b.kind == "image" and b.page == 46 for b in doc.blocks)    # boxed title isn't a diagram
@@ -141,6 +147,13 @@ def test_capital_allocation_sample():
 
 def test_multifactor_sample():
     doc = parse_sample(MULTIFACTOR)
+    # Slide 4: β typed as "b" in the Symbol font; lines indented with spaces
+    slide4 = [(b.kind, b.level, b.text) for b in doc.blocks if b.page == 4]
+    assert ("paragraph", 1, "= E(Ri ) + βi GDP GDP + βi IR IR + ei") in slide4
+    defs = [x for x in slide4 if "sensitivity of stock" in x[2]]
+    assert [x[1] for x in defs] == [1, 1] and defs[0][2].startswith("βi GDP")
+    where = next(x for x in slide4 if x[2].startswith("where"))
+    assert where[1] == 0
     diagram = next(b for b in doc.blocks if b.kind == "image" and b.page == 3)
     assert "Security A" in diagram.image.alt and "Factor 3" in diagram.image.alt
 

@@ -28,17 +28,33 @@ def _lookup(table: dict, low: int) -> str | None:
     return table.get(low) or table.get(chr(low))
 
 
+def is_symbol_font(font: str | None) -> bool:
+    """The old picture fonts (not Unicode fonts like "Segoe UI Symbol")."""
+    name = (font or "").strip().lower()
+    return name == "symbol" or name.startswith(("wingdings", "webdings"))
+
+
 def fix_symbols(text: str, font: str | None) -> str:
-    """Replace private-use characters (U+F000-U+F0FF) using the font's table."""
-    if not any(0xF000 <= ord(c) <= 0xF0FF for c in text):
-        return text
+    """Translate characters typed in the Symbol/Wingdings fonts.
+
+    Two cases: private-use characters (U+F000-U+F0FF), which can appear in any
+    run; and ordinary letters in a run whose font IS Symbol/Wingdings (e.g. a
+    "b" in the Symbol font displays as β). Characters with no translation are
+    kept (spaces, digits) or, for private-use ones, dropped.
+    """
     name = (font or "").lower()
+    whole_run = is_symbol_font(font)
+    if not whole_run and not any(0xF000 <= ord(c) <= 0xF0FF for c in text):
+        return text
     tables = [_WINGDINGS] if "wingding" in name else [_SYMBOL] if "symbol" in name else [_SYMBOL, _WINGDINGS]
     out = []
     for c in text:
-        if 0xF000 <= ord(c) <= 0xF0FF:
-            low = ord(c) - 0xF000
+        code = ord(c)
+        if 0xF000 <= code <= 0xF0FF:
+            low = code - 0xF000
             out.append(next((v for t in tables if (v := _lookup(t, low))), ""))
+        elif whole_run and code < 0x100 and not c.isspace() and not c.isdigit():
+            out.append(next((v for t in tables if (v := _lookup(t, code))), c))
         else:
             out.append(c)
     return "".join(out)

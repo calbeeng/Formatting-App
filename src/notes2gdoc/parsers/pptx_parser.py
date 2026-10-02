@@ -407,6 +407,7 @@ class PptxParser:
     def _text_blocks(self, it: _Item, slide_no: int) -> list[Block]:
         out: list[Block] = []
         counters: dict[int, int] = {}
+        anchor: Block | None = None  # last line not indented with leading spaces
         for p in it.shape.text_frame.paragraphs:
             text = p.text.strip()
             if not text or _JUNK.search(text):
@@ -416,13 +417,23 @@ class PptxParser:
                 continue
             kind = self._bullet_kind(p, it)
             level = p.level
-            # A plain paragraph typed with leading spaces right after a bullet
-            # is that bullet's text continuing ("Would not invest … –" /
-            # "    “fair games”.").
-            if (not kind and out and out[-1].kind == "bullet" and p.text[:1].isspace()
-                    and level <= out[-1].level):
-                out[-1].runs = normalise_whitespace(out[-1].runs + [Run(" ")] + runs)
-                continue
+            # Plain lines indented by typing spaces at the start (or by a left
+            # margin) sit under the line above: "   = E(Ri) + …" under its
+            # bullet, "      βi GDP = …" under "where …".
+            # Each such line is indented one step past the last line that
+            # WASN'T indented this way (its "anchor"), so a run of them lines up.
+            lead = len(p.text) - len(p.text.lstrip(" 	"))
+            if not kind:
+                marl = int(p._p.pPr.get("marL", "0")) if p._p.pPr is not None else 0
+                if anchor is not None and (lead >= 2 and anchor.kind == "bullet" or lead >= 4):
+                    level = max(level, anchor.level + 1)
+                    spaced = True
+                else:
+                    spaced = False
+                    if marl >= 228600:  # a left margin of at least a quarter inch
+                        level = max(level, round(marl / 457200))
+            else:
+                spaced = False
             if isinstance(kind, tuple):  # automatic numbering ("1.", "a)")
                 scheme, start = kind
                 counters[level] = counters.get(level, start - 1) + 1
@@ -435,7 +446,11 @@ class PptxParser:
                 out.append(Block("bullet", runs, level=level, page=slide_no, note=f"bullet, level {level + 1}"))
             else:
                 note = "text in a shape" if it.kind == "box" else ""
+                if spaced:
+                    note = "line indented with spaces"
                 out.append(Block("paragraph", runs, level=level, page=slide_no, note=note))
+            if not spaced:
+                anchor = out[-1]
         return out
 
     def _bullet_kind(self, p, it: _Item):

@@ -51,4 +51,43 @@ def parse_file(path: str | Path, settings: Settings | None = None) -> Document:
     path = Path(path)
     if not path.exists():
         raise ParseError(f"File not found: {path}")
-    return get_parser(path).parse(path, settings)
+    parser = get_parser(path)
+    readable = _readable_copy(path)
+    try:
+        doc = parser.parse(readable, settings)
+    finally:
+        if readable != path:
+            readable.unlink(missing_ok=True)
+    doc.source_path = str(path)
+    return doc
+
+
+def _readable_copy(path: Path) -> Path:
+    """`path` itself, or a temporary copy if another program has it locked.
+
+    On Windows, Word and PowerPoint lock the files they have open so other
+    programs can't read them directly, but Windows' own copy function still
+    can. So we read from a quick temporary copy instead of asking you to
+    close the file.
+    """
+    try:
+        with open(path, "rb"):
+            return path
+    except PermissionError:
+        pass
+    import os
+    import sys
+    import tempfile
+
+    if sys.platform == "win32":
+        import ctypes
+
+        fd, tmp = tempfile.mkstemp(suffix=path.suffix)
+        os.close(fd)
+        if ctypes.windll.kernel32.CopyFileW(str(path.resolve()), tmp, False):
+            return Path(tmp)
+        Path(tmp).unlink(missing_ok=True)
+    raise ParseError(
+        f"“{path.name}” is open in another program (such as Word or PowerPoint) that's blocking it. "
+        "Close it there and try again."
+    )
