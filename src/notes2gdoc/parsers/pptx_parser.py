@@ -149,17 +149,39 @@ def _theme_colours(prs) -> dict[str, str]:
 
 
 def _colour_of(el, theme) -> str | None:
-    """Colour from an element containing a:srgbClr or a:schemeClr."""
+    """Colour from an element containing a:srgbClr or a:schemeClr, including
+    PowerPoint's lighter/darker adjustments ("Blue, Accent 1, Lighter 80%"
+    is stored as accent1 with lumMod/lumOff)."""
     if el is None:
         return None
-    srgb = el.find(A + "srgbClr")
-    if srgb is not None:
-        return "#" + srgb.get("val").upper()
-    scheme = el.find(A + "schemeClr")
-    if scheme is not None:
-        name = _SCHEME_ALIAS.get(scheme.get("val"), scheme.get("val"))
-        return theme.get(name)
-    return None
+    clr = el.find(A + "srgbClr")
+    base = "#" + clr.get("val").upper() if clr is not None else None
+    if clr is None:
+        clr = el.find(A + "schemeClr")
+        if clr is None:
+            return None
+        base = theme.get(_SCHEME_ALIAS.get(clr.get("val"), clr.get("val")))
+    if base is None:
+        return None
+    return _apply_modifiers(base, clr)
+
+
+def _apply_modifiers(hex_: str, clr) -> str:
+    import colorsys
+
+    r, g, b = (int(hex_[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    for mod in clr:
+        tag = mod.tag.replace(A, "")
+        val = int(mod.get("val", "100000")) / 100000
+        if tag in ("lumMod", "lumOff"):
+            h, l, s = colorsys.rgb_to_hls(r, g, b)
+            l = l * val if tag == "lumMod" else l + val
+            r, g, b = colorsys.hls_to_rgb(h, min(1.0, max(0.0, l)), s)
+        elif tag == "tint":    # towards white
+            r, g, b = (c + (1 - c) * (1 - val) for c in (r, g, b))
+        elif tag == "shade":   # towards black
+            r, g, b = (c * val for c in (r, g, b))
+    return "#" + "".join(f"{round(c * 255):02X}" for c in (r, g, b))
 
 
 # --------------------------------------------------------------------------- #
@@ -591,6 +613,15 @@ class PptxParser:
         members = [i for i in items if i.kind in ("box", "shape", "line", "picture", "text")
                    and region[0] - 2 <= i.cx <= region[2] + 2 and region[1] - 2 <= i.cy <= region[3] + 2
                    and (i.kind != "text" or len(i.text) < 120)]
+        # Short labels just beside the diagram (e.g. "Size Factor" in a dashed
+        # box to the left of a row of boxes) belong to it too
+        for i in items:
+            if i in members or i.kind not in ("text", "box") or len(i.text) >= 60:
+                continue
+            beside = (region[1] <= i.cy <= region[3]) and (region[0] - 150 <= i.x1 <= region[0] + 5
+                                                           or region[2] - 5 <= i.x0 <= region[2] + 150)
+            if beside:
+                members.append(i)
         for m in members:
             region = [min(region[0], m.x0), min(region[1], m.y0), max(region[2], m.x1), max(region[3], m.y1)]
         png = self._render(members, region)
@@ -633,11 +664,20 @@ class PptxParser:
                 elif "Arrow" in prst and not m.text.strip():
                     _block_arrow(page, r, prst, fill or stroke)
                 else:
-                    page.draw_rect(r, color=stroke, fill=fill, width=1)
+                    ln = m.shape._element.spPr.find(A + "ln")
+                    dash = ln.find(A + "prstDash") if ln is not None else None
+                    dashes = "[3 2] 0" if dash is not None and dash.get("val", "solid") != "solid" else None
+                    page.draw_rect(r, color=stroke, fill=fill, width=1, dashes=dashes)
                 if m.text.strip():
                     self._draw_text(page, r, m.shape, text_colour, centred=True)
             elif m.kind == "text":
-                self._draw_text(page, r, m.shape, (0, 0, 0), centred=False)
+                ln = m.shape._element.spPr.find(A + "ln")
+                outline = _colour_of(ln.find(A + "solidFill"), self.theme) if ln is not None else None
+                if outline:
+                    dash = ln.find(A + "prstDash")
+                    dashes = "[3 2] 0" if dash is not None and dash.get("val", "solid") != "solid" else None
+                    page.draw_rect(r, color=_rgb(outline), width=0.75, dashes=dashes)
+                self._draw_text(page, r, m.shape, (0, 0, 0), centred=bool(outline))
         png = page.get_pixmap(dpi=144).tobytes("png")
         doc.close()
         return png
@@ -694,7 +734,8 @@ class PptxParser:
         if not paras:
             return
         r, g, b = (int(c * 255) for c in colour)
-        css = (f"* {{font-family: sans-serif; font-size: {size:.0f}px; color: rgb({r},{g},{b});"
+        family = "serif" if _serif_font(sh) else "sans-serif"
+        css = (f"* {{font-family: {family}; font-size: {size:.0f}px; color: rgb({r},{g},{b});"
                f" text-align: {'center' if centred else 'left'}; margin: 0;}}")
         html = "".join(f"<p>{p}</p>" for p in paras)
         inner = fitz.Rect(rect.x0 + 3, rect.y0 + 2, rect.x1 - 3, rect.y1 - 2)
@@ -718,6 +759,15 @@ def slide_no_of(slide, prs) -> int:
         if s.slide_id == slide.slide_id:
             return i
     return 0
+
+
+def _serif_font(sh) -> bool:
+    """Does the shape's text use a serif font like Times New Roman?"""
+    for latin in sh._element.iter(A + "latin"):
+        face = (latin.get("typeface") or "").lower()
+        if face and not face.startswith("+"):
+            return any(k in face for k in ("times", "georgia", "garamond", "cambria", "serif", "book"))
+    return False
 
 
 def _clean_text(text: str) -> str:
