@@ -36,6 +36,7 @@ from pathlib import Path
 import pymupdf as fitz
 
 from ..config import Settings
+from ..lists import bulletise_slide
 from ..model import Block, Document, Image, Run, Table, TableCell, merge_runs, normalise_whitespace
 from ..numbering import int_to_roman
 from .base import ParseError
@@ -250,8 +251,13 @@ class PptxParser:
 
             # --- Diagrams drawn with boxes and connector lines ----------------
             diagram, body_items = self._diagram(body_items, title_item, slide_no)
+            body: list[Block] = []
             for it in self._ordered(body_items + ([diagram] if diagram else [])):
-                slide_blocks.extend(self._item_blocks(it, slide_no))
+                body.extend(self._item_blocks(it, slide_no))
+            if not boilerplate:
+                # Slides without bullets: each paragraph becomes a point
+                body = bulletise_slide(body, lambda b: b.level * 36.0)
+            slide_blocks.extend(body)
 
             if merged and slide_blocks:
                 slide_blocks[0].note = merged + (f"; {slide_blocks[0].note}" if slide_blocks[0].note else "")

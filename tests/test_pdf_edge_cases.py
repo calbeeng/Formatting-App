@@ -5,7 +5,7 @@ import pytest
 
 from notes2gdoc.model import Block, Run
 from notes2gdoc.parsers import NoTextLayerError, parse_file
-from notes2gdoc.parsers.pdf.structure import join_line
+from notes2gdoc.parsers.pdf.structure import join_line, resolve_line_hyphens
 from notes2gdoc.parsers.pdf.extract import Line, Piece
 
 
@@ -15,9 +15,19 @@ def _line(text):
 
 
 def test_hyphenated_line_end_rejoined():
+    # "insolvency" is used elsewhere, so "insol-" + "vency" is a broken word
     b = Block("paragraph", [Run("the insol-")])
     join_line(b, _line("vency of the company"))
+    resolve_line_hyphens([b, Block("paragraph", [Run("Insolvency Act")])])
     assert b.text == "the insolvency of the company"
+
+
+def test_line_end_hyphen_kept_when_word_is_hyphenated():
+    # "decisionspecific" isn't a word used anywhere, so the hyphen is real
+    b = Block("paragraph", [Run("time-specific and decision-")])
+    join_line(b, _line("specific – i.e. in relation"))
+    resolve_line_hyphens([b])
+    assert b.text == "time-specific and decision-specific – i.e. in relation"
 
 
 def test_prefix_hyphen_kept():

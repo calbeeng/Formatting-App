@@ -14,7 +14,8 @@ Rules:
   top, e.g. "Pre-Acquisition Steps") become "section_title" headings (Heading 1
   by default), so the slide titles that follow sit underneath them.
 * Consecutive slides with the same title ("UNCITRAL Model Law" x7) get only one
-  heading; the later slides' content carries on under it.
+  heading; the later slides' content carries on under it. The same goes for a
+  subtitle repeated on each of those slides.
 * Title colour is dropped, because in slides it's theme decoration rather than
   meaning. A title that is entirely bold or italic loses that too, so the target
   doc's heading style decides the look.
@@ -29,6 +30,7 @@ import re
 from dataclasses import replace
 
 from ...config import Settings
+from ...lists import bulletise_slide
 from ...model import Block, Run, merge_runs
 from .extract import DASH_BULLETS, Line
 from .layout import cluster_positions, level_for
@@ -39,6 +41,7 @@ from .structure import (
     is_decorative,
     join_line,
     hanging_wrap,
+    is_new_item,
     item_text_x,
     region_blocks,
     starts_list_item,
@@ -84,6 +87,7 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
     blocks: list[Block] = []
     prev_title: str | None = None
     prev_title_page = 0
+    prev_subtitle: str | None = None
 
     for idx, items in enumerate(pages):
         items = [
@@ -137,13 +141,21 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
             while body and isinstance(body[0], Line) and not body[0].bullet \
                     and body[0].bold_ratio >= 0.6 and _wraps_line(sub[-1], body[0]):
                 sub.append(body.pop(0))
-            slide_blocks.append(_heading(sub, "slide_subtitle", slide_no, "bold line under the slide title"))
+            sub_text = _norm(" ".join(ln.text for ln in sub))
+            # Repeated on every slide of a merged run ("BEST INTERESTS" /
+            # "Section 6, MCA" x5): only the first one is a heading
+            if not (merged_note and sub_text == prev_subtitle):
+                slide_blocks.append(_heading(sub, "slide_subtitle", slide_no, "bold line under the slide title"))
+            prev_subtitle = sub_text
+        elif not merged_note:
+            prev_subtitle = None
 
         # --- Body ------------------------------------------------------------
         open_: OpenBlock | None = None
         # The most recent bullet's (glyph x, level), for paragraphs that sit
         # inside a list, like an indented quote under a bullet.
         last_bullet: tuple[float, int] | None = None
+        first_x: dict[int, float] = {}   # paragraph -> left edge of its first line
 
         def close():
             nonlocal open_
@@ -177,6 +189,7 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
                 continue
             close()
             b = Block("paragraph", ln.runs(), page=slide_no)
+            first_x[id(b)] = ln.x0
             if last_bullet and ln.level_x > last_bullet[0] + INDENT_TOLERANCE:
                 # Indented past the bullet above it: it's part of that list
                 # item (e.g. a quoted clause), so indent it to the bullet's text.
@@ -185,6 +198,8 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
             slide_blocks.append(b)
             open_ = OpenBlock(b, item_text_x(ln), ln, [ln])
         close()
+        if not boilerplate:
+            slide_blocks = bulletise_slide(slide_blocks, lambda b: first_x.get(id(b), 0.0))
 
         if merged_note and slide_blocks:
             slide_blocks[0].note = merged_note + (f"; {slide_blocks[0].note}" if slide_blocks[0].note else "")
@@ -239,7 +254,7 @@ def _wraps_line(prev: Line, ln: Line) -> bool:
 
 
 def _wraps(open_: OpenBlock, ln: Line) -> bool:
-    if starts_list_item(ln):
+    if is_new_item(open_, ln):
         return False
     if hanging_wrap(open_, ln):
         return True
@@ -262,4 +277,4 @@ def _wraps(open_: OpenBlock, ln: Line) -> bool:
         open_.block.kind == "bullet"
         and ln.x0 > first.x0 + 2
         and abs(ln.size - first.size) <= TITLE_SIZE_TOLERANCE
-    ) and abs(ln.x0 - open_.text_x) <= INDENT_TOLERANCE + 1
+    )

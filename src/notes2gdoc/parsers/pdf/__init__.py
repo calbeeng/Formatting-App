@@ -13,7 +13,7 @@ from .extract import Line, extract_page
 from .furniture import remove_furniture
 from .layout import is_slide_deck
 from .slides import build_slide_blocks
-from .structure import build_document_blocks
+from .structure import build_document_blocks, resolve_line_hyphens
 
 # PyMuPDF's table finder prints an advert for an add-on package to stdout. In
 # the double-click app there's no console, so switch it off.
@@ -45,6 +45,7 @@ class PdfParser:
                 blocks = build_slide_blocks(cleaned, settings)
             else:
                 blocks = build_document_blocks(cleaned)
+            resolve_line_hyphens(blocks)
             return Document(
                 blocks=blocks,
                 source_path=str(path),

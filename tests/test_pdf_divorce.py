@@ -37,4 +37,6 @@ def test_flowchart_is_picture(divorce):
 def test_side_by_side_boxes_are_not_a_picture(divorce):
     page = [b for b in divorce.blocks if b.page == 18]
     assert not any(b.kind == "image" for b in page)
-    assert find(divorce, "e. DMA").text == "e. DMA (Divorce by Mutual Agreement) from 1 July 2024"
+    dma = find(divorce, "DMA (Divorce")
+    assert dma.text == "DMA (Divorce by Mutual Agreement) from 1 July 2024"
+    assert dma.numbered and dma.level == 1   # "a. … e." -> lettered numbered list

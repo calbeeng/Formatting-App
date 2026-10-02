@@ -49,6 +49,9 @@ class TableRegion:
     n_cols: int
     cells: list[CellSpec]
     col_widths: list[float] = field(default_factory=list)  # in points, left to right
+    # Ruled tables: x where each column's text starts. A text line running
+    # across one of these (a label and its text on one line) is cut there.
+    splits: list[float] = field(default_factory=list)
 
     @property
     def y0(self) -> float:
@@ -110,6 +113,135 @@ def find_tables(page: fitz.Page, drawings: list[dict]) -> list[TableRegion]:
         widths = [col_edges[i + 1] - col_edges[i] for i in range(len(col_edges) - 1)]
         out.append(TableRegion(rect, n_rows, n_cols, cells, widths if len(widths) == n_cols else []))
     return out
+
+
+# Ruled tables: full-width horizontal lines between rows, no vertical lines
+# (common in slide decks). A rule must span this share of the page width.
+RULE_MIN_WIDTH = 0.6
+# The gap between the two columns must be at least this wide (points)
+RULED_MIN_GAP = 3
+# Rows sharing a column gap + lines starting at its right edge
+COLUMN_SUPPORT = 3
+
+
+def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[fitz.Rect, list[float]]],
+                      exclude: list[fitz.Rect]) -> list[TableRegion]:
+    """Tables drawn with horizontal rules only, like
+
+        ─────────────────────────────────────────────
+              Considerations in Sections 6(3) – 6(9)       <- header (one cell)
+        ─────────────────────────────────────────────
+         Section 6(3)     (a) Whether it is likely …
+         Future Capacity  (b) If it appears likely …
+        ─────────────────────────────────────────────
+
+    `texts` holds each text line's box and the x positions where its style
+    changes at the start of a word (see extract._style_breaks).
+
+    * Rows are the bands between rules (at least 3 rules, 2 bands with text).
+    * Column boundaries come from empty vertical gaps between the text in a
+      row. A gap counts only if no line in any row runs across it (rows of a
+      single line, maybe a header, don't count), unless that
+      line changes style exactly at the gap's right edge. That happens when a
+      bold label and its text share a line ("**Section 3(2)** Assume person
+      has capacity"); such lines are split there (TableRegion.splits).
+    * A row with a single line that runs across a boundary, or that sits
+      clear of the first column (a centred title), is a header spanning all
+      columns.
+    * At least one row must have text in two columns, or it's just rules."""
+    width = page.rect.width
+    rules = sorted(
+        (fitz.Rect(d["rect"]) for d in drawings
+         if d["rect"].height <= THIN and d["rect"].width >= RULE_MIN_WIDTH * width),
+        key=lambda r: r.y0,
+    )
+    ys: list[float] = []
+    for r in rules:
+        if not ys or r.y0 - ys[-1] > 3:
+            ys.append((r.y0 + r.y1) / 2)
+    if len(ys) < 3:
+        return []
+    x0 = min(r.x0 for r in rules)
+    x1 = max(r.x1 for r in rules)
+    if any(fitz.Rect(x0, ys[0], x1, ys[-1]).intersects(e) for e in exclude):
+        return []
+
+    bands = []
+    for top, bottom in zip(ys, ys[1:]):
+        rows = [(r, w) for r, w in texts if top < (r.y0 + r.y1) / 2 < bottom and x0 <= r.x0 and r.x1 <= x1 + 2]
+        if rows:
+            bands.append((top, bottom, rows))
+    if len(bands) < 2:
+        return []
+
+    def crosses(item, mid, edge) -> bool:
+        r, words = item
+        return r.x0 < mid < r.x1 and not any(abs(w - edge) <= 4 for w in words)
+
+    # Candidate gaps from every row with 2+ lines; keep those no row crosses
+    ok: list[tuple[float, float]] = []
+    for _, _, rows in bands:
+        spans = sorted((r.x0, r.x1) for r, _ in rows)
+        reach = spans[0][1]
+        for a, b in spans[1:]:
+            if a - reach >= RULED_MIN_GAP:
+                gap = (reach, a)
+                mid = (gap[0] + gap[1]) / 2
+                # (one-line rows may be headers running across: no veto)
+                if all(not crosses(it, mid, gap[1]) for _, _, rs in bands if len(rs) > 1 for it in rs):
+                    ok.append(gap)
+            reach = max(reach, b)
+    if not ok:
+        return []
+    # Overlapping gaps are the same column boundary: keep their common part
+    # and count the rows that have it
+    ok.sort()
+    merged: list[list[float]] = []
+    for a, b in ok:
+        if merged and a < merged[-1][1]:
+            merged[-1] = [max(a, merged[-1][0]), min(b, merged[-1][1]), merged[-1][2] + 1]
+        else:
+            merged.append([a, b, 1])
+    # A real column edge is backed up: by several rows, or by several lines
+    # starting right at it. (A stray short word, like "of" left behind when
+    # "Disposition of property" wraps, leaves a one-off gap.)
+    in_table = [it for _, _, rs in bands for it in rs]
+    merged = [
+        (a, b) for a, b, n in merged
+        if n + sum(1 for r, brk in in_table
+                   if abs(r.x0 - b) <= 4 or any(abs(x - b) <= 4 for x in brk)) >= COLUMN_SUPPORT
+    ]
+    if not merged:
+        return []
+    edges = [b for _, b in merged]                 # where each column's text starts
+    mids = [(a + b) / 2 for a, b in merged]
+    bounds = [x0, *mids, x1]
+    n_cols = len(bounds) - 1
+
+    def column(r: fitz.Rect) -> int:
+        cx = (r.x0 + r.x1) / 2
+        return next(i for i in range(n_cols) if cx <= bounds[i + 1] or i == n_cols - 1)
+
+    cells: list[CellSpec] = []
+    multi_column = False
+    for row, (top, bottom, rows) in enumerate(bands):
+        across = any(crosses(it, m, e) for it in rows for m, e in zip(mids, edges))
+        if across or (len(rows) == 1 and rows[0][0].x0 > bounds[1]):
+            cells.append(CellSpec(row, 0, fitz.Rect(x0, top, x1, bottom), colspan=n_cols))
+            continue
+        used = set()
+        for r, _ in rows:
+            used.add(column(r))
+            # a line cut at a boundary fills both sides
+            used.update(i + 1 for i, m in enumerate(mids) if r.x0 < m < r.x1)
+        multi_column |= len(used) >= 2
+        for c in range(n_cols):
+            cells.append(CellSpec(row, c, fitz.Rect(bounds[c], top, bounds[c + 1], bottom)))
+    if not multi_column:
+        return []
+    rect = fitz.Rect(x0, bands[0][0], x1, bands[-1][1])
+    widths = [bounds[i + 1] - bounds[i] for i in range(n_cols)]
+    return [TableRegion(rect, len(bands), n_cols, cells, widths, splits=edges)]
 
 
 def _dedupe(values: list[int], tol: int = 3) -> list[int]:

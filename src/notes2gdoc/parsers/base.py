@@ -59,6 +59,11 @@ def parse_file(path: str | Path, settings: Settings | None = None) -> Document:
         if readable != path:
             readable.unlink(missing_ok=True)
     doc.source_path = str(path)
+    from ..lists import convert_numbered_lists
+    from ..tables import merge_split_tables
+
+    merge_split_tables(doc)      # a table continued over several slides -> one table
+    convert_numbered_lists(doc)  # typed "1." / "a." lists -> real numbered lists
     return doc
 
 

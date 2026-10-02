@@ -42,14 +42,17 @@ def run_html(run: Run, strip_colour: bool) -> str:
 
 
 def _cell_html(blocks: list[Block], settings: Settings) -> str:
+    from ..lists import display_labels
+
     parts = []
+    labels = display_labels(blocks)
     for b in blocks:
         if b.spacer:
             parts.append("<p>&nbsp;</p>")
             continue
         inner = "".join(run_html(r, settings.strip_colour) for r in b.runs)
         if b.kind == "bullet":
-            glyph = BULLET_GLYPHS[b.level % len(BULLET_GLYPHS)]
+            glyph = labels.get(id(b)) if b.numbered else BULLET_GLYPHS[b.level % len(BULLET_GLYPHS)]
             parts.append(f'<p style="margin-left:{12 * b.level}px">{glyph}&nbsp;{inner}</p>')
         else:
             parts.append(f"<p>{inner}</p>")
@@ -74,7 +77,8 @@ def table_html(block: Block, settings: Settings) -> str:
             'style="border-color:#999999; margin-top:8px; margin-bottom:8px">' + "".join(rows) + "</table>")
 
 
-def block_html(block: Block, settings: Settings, show_notes: bool, image_name: str = "") -> str:
+def block_html(block: Block, settings: Settings, show_notes: bool, image_name: str = "",
+               label: str | None = None) -> str:
     if block.spacer:
         return "<p>&nbsp;</p>"
     inner = "".join(run_html(r, settings.strip_colour) for r in block.runs)
@@ -98,7 +102,7 @@ def block_html(block: Block, settings: Settings, show_notes: bool, image_name: s
             return (f'<p style="font-size:{size}; margin-top:12px; margin-bottom:4px">'
                     f"{tag}{wrap_open}{inner}{wrap_close}{note}</p>")
     if block.kind == "bullet":
-        glyph = BULLET_GLYPHS[block.level % len(BULLET_GLYPHS)]
+        glyph = label if block.numbered and label else BULLET_GLYPHS[block.level % len(BULLET_GLYPHS)]
         indent = 18 + 24 * block.level
         return (f'<table style="margin-left:{indent}px; margin-top:2px" cellspacing="0" cellpadding="0">'
                 f'<tr><td width="18" valign="top">{glyph}</td>'
@@ -111,8 +115,11 @@ def document_html(doc: Document, settings: Settings, show_notes: bool = False,
                   show_skipped: bool = True) -> tuple[str, dict[str, bytes]]:
     """Returns (html, images) where images maps the <img src> names used in the
     HTML to PNG bytes; the caller registers them with the text browser."""
+    from ..lists import display_labels
+
     parts = [f"<html><head><style>{CSS}</style></head><body>"]
     images: dict[str, bytes] = {}
+    labels = display_labels(doc.blocks)
     for i, b in enumerate(doc.blocks):
         if not show_skipped and not b.selected:
             continue
@@ -120,6 +127,6 @@ def document_html(doc: Document, settings: Settings, show_notes: bool = False,
         if b.kind == "image":
             name = f"notes2gdoc-image-{i}.png"
             images[name] = b.image.png
-        parts.append(block_html(b, settings, show_notes, name))
+        parts.append(block_html(b, settings, show_notes, name, labels.get(id(b))))
     parts.append("</body></html>")
     return "".join(parts), images

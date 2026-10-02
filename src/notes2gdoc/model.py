@@ -113,6 +113,16 @@ class Block:
     # A deliberate blank line (from a Word document), kept to separate sections.
     # Ticked/unticked along with the item before it.
     spacer: bool = False
+    # For numbered list items (kind="bullet"): the Google Docs numbering
+    # preset, e.g. "NUMBERED_DECIMAL_ALPHA_ROMAN". None = an ordinary bullet.
+    numbered: str | None = None
+    # The first item of a numbered list, when it directly follows another list
+    # (so it starts again at 1 instead of carrying on that list's numbers).
+    list_start: bool = False
+    # A paragraph sitting between the items of the numbered list above it
+    # (e.g. a note under item 1, before item 2). It's indented under its item
+    # and the list's numbering carries on after it.
+    in_list: bool = False
 
     @property
     def text(self) -> str:

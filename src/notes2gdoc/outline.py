@@ -54,15 +54,18 @@ def _render_table(block: Block, settings: Settings, plain: bool) -> str:
             if cell is None:
                 continue
             parts = []
+            from .lists import display_labels
+            cell_labels = display_labels(cell.blocks)
             for b in cell.blocks:
                 text = b.text if plain else "".join(render_run(x, settings.strip_colour) for x in b.runs)
-                parts.append(("• " if b.kind == "bullet" else "") + text)
+                mark = (cell_labels.get(id(b), "#.") + " ") if b.numbered else "• " if b.kind == "bullet" else ""
+                parts.append(mark + text)
             cells.append(" / ".join(parts) + " <<" * (cell.colspan - 1))
         rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows)
 
 
-def render_block(block: Block, settings: Settings, plain: bool = False) -> str:
+def render_block(block: Block, settings: Settings, plain: bool = False, label: str | None = None) -> str:
     if block.spacer:
         return "" if block.selected else "(skipped)"
     if block.kind == "table":
@@ -81,7 +84,8 @@ def render_block(block: Block, settings: Settings, plain: bool = False) -> str:
         prefix = "#" * rank + " " if rank else ""
         line = prefix + text
     elif block.kind == "bullet":
-        line = "  " * block.level + "- " + text
+        mark = (label or "#.") if block.numbered else "-"
+        line = "  " * block.level + mark + " " + text
     else:
         line = "  " * block.level + text  # paragraphs inside a list are indented
     if not block.selected:
@@ -91,12 +95,15 @@ def render_block(block: Block, settings: Settings, plain: bool = False) -> str:
 
 def render_outline(doc: Document, settings: Settings | None = None, plain: bool = False,
                    debug: bool = False, include_skipped: bool = True) -> str:
+    from .lists import display_labels
+
     settings = settings or Settings()
+    labels = display_labels(doc.blocks)
     out = []
     for b in doc.blocks:
         if not include_skipped and not b.selected:
             continue
-        line = render_block(b, settings, plain)
+        line = render_block(b, settings, plain, labels.get(id(b)))
         if debug:
             line += f"    [p{b.page}{'; ' + b.note if b.note else ''}]"
         out.append(line)

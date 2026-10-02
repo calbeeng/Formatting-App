@@ -19,7 +19,7 @@ import pymupdf as fitz
 
 from ...model import Run
 from .layout import Box, Segment, analyse_drawings
-from .regions import DiagramRegion, TableRegion, find_diagrams, find_tables
+from .regions import DiagramRegion, TableRegion, find_diagrams, find_ruled_tables, find_tables
 
 # Fonts whose characters are pictures, not letters. A line starting with one of
 # their characters (e.g. Wingdings "Ø", which displays as an arrow) is a bullet.
@@ -84,6 +84,9 @@ class Line:
     level_x: float = 0.0
     # 0 = normal full-width text; 1/2 = left/right column of a two-column page
     column: int = 0
+    # x of the first letter of each word (for "where does the text after the
+    # list marker start?")
+    word_starts: list[float] = field(default_factory=list)
     page_width: float = 0.0
     page_height: float = 0.0
 
@@ -158,6 +161,9 @@ def extract_page(page: fitz.Page, page_index: int) -> list[PageItem]:
 
     visible = [sp for sp in raw_lines if _visible(sp)]
     tables = find_tables(page, drawings)
+    tables += find_ruled_tables(page, drawings,
+                                [(_rect(sp), _style_breaks(sp)) for sp in visible if not _page_number(sp, page)],
+                                [t.rect for t in tables])
     diagrams = find_diagrams(page, drawings, [_rect(sp) for sp in visible], [t.rect for t in tables])
 
     def build(span_lists: list[list[_Span]]) -> list[Line]:
@@ -169,11 +175,14 @@ def extract_page(page: fitz.Page, page_index: int) -> list[PageItem]:
     for sp in raw_lines:
         r = _rect(sp)
         centre = fitz.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
-        table = next((t for t in tables if t.rect.contains(centre)), None)
+        table = None if _page_number(sp, page) else next((t for t in tables if t.rect.contains(centre)), None)
         if table:
-            cell = next((c for c in table.cells if c.rect.contains(centre)), None)
-            if cell:
-                cell.lines.append(sp)
+            for part in _split_at(sp, table.splits):
+                pr = _rect(part)
+                pc = fitz.Point((pr.x0 + pr.x1) / 2, (pr.y0 + pr.y1) / 2)
+                cell = next((c for c in table.cells if c.rect.contains(pc)), None)
+                if cell:
+                    cell.lines.append(part)
             continue
         diagram = next((d for d in diagrams if d.rect.contains(centre)), None)
         if diagram:
@@ -273,6 +282,56 @@ def _raw_lines(page: fitz.Page) -> list[list[_Span]]:
     return out
 
 
+def _page_number(spans: list[_Span], page: fitz.Page) -> bool:
+    """A lone number in the bottom tenth of the page (a slide/page number).
+    It stays in the normal flow, where furniture.py removes it, even when it
+    sits inside a table's area."""
+    text = "".join(ch.c for s in spans for ch in s.chars).strip()
+    return text.isdigit() and len(text) <= 3 and _rect(spans).y0 > page.rect.height * 0.9
+
+
+def _style_breaks(spans: list[_Span]) -> list[float]:
+    """x of each word on a raw line that starts in a different style (font,
+    colour) from the text before it, e.g. "Assume" in a line reading
+    "**Section 3(2)** Assume person has capacity". In a ruled table, that's
+    where a label ends and its text begins."""
+    out: list[float] = []
+    prev_style = None
+    for s in spans:
+        style = (s.font, s.flags, s.color)
+        visible = [ch for ch in s.chars if not ch.c.isspace()]
+        if not visible:
+            continue
+        if prev_style is not None and style != prev_style:
+            out.append(visible[0].x0)
+        prev_style = style
+    return out
+
+
+def _split_at(spans: list[_Span], xs: list[float]) -> list[list[_Span]]:
+    """Cut a raw line where its style changes right at one of the x positions
+    (a ruled table's column edges). Other lines come back whole."""
+    if not xs or not _visible(spans):
+        return [spans]
+    r = _rect(spans)
+    starts = _style_breaks(spans)
+    cuts = [x for x in xs if r.x0 + 1 < x < r.x1 and any(abs(w - x) <= 4 for w in starts)]
+    if not cuts:
+        return [spans]
+    edges = [-1e9, *[x - 4 for x in cuts], 1e9]
+    parts: list[list[_Span]] = []
+    for lo, hi in zip(edges, edges[1:]):
+        part = []
+        for s in spans:
+            chars = [ch for ch in s.chars if lo <= ch.x0 < hi]
+            if chars:
+                part.append(_Span(chars, s.size, s.font, s.flags, s.color,
+                                  chars[0].x0, s.y0, chars[-1].x1, s.y1))
+        if part and _visible(part):
+            parts.append(part)
+    return parts or [spans]
+
+
 def _visible(spans: list[_Span]) -> bool:
     return any(not ch.c.isspace() for s in spans for ch in s.chars)
 
@@ -363,7 +422,9 @@ def _build_line(spans, page, page_index, boxes: list[Box], segs: list[Segment]) 
     baseline = origins[len(origins) // 2]
 
     pieces: list[Piece] = []
+    word_starts: list[float] = []
     prev_x1: float | None = None
+    after_space = True
     for s in spans:
         bold = bool(s.flags & 16) or bool(_BOLD_FONT.search(s.font))
         italic = bool(s.flags & 2) or bool(_ITALIC_FONT.search(s.font))
@@ -381,7 +442,15 @@ def _build_line(spans, page, page_index, boxes: list[Box], segs: list[Segment]) 
             if gap > 0.2 * dom_size and not pieces[-1].text.endswith(" ") and not s.chars[0].c.isspace():
                 pieces.append(Piece(" ", False, False, False, False, False, None, dom_size, prev_x1, s.x0))
 
+        if prev_x1 is not None and s.x0 - prev_x1 > 0.2 * dom_size:
+            after_space = True  # a visible gap between spans separates words
         for ch in s.chars:
+            if ch.c.isspace():
+                after_space = True
+            else:
+                if after_space:
+                    word_starts.append(ch.x0)
+                after_space = False
             ul = (not ch.c.isspace()) and _underlined(ch, baseline, dom_size, segs)
             style = (bold, italic, ul, superscript, subscript, colour)
             if pieces and pieces[-1].style() == style:
@@ -409,6 +478,7 @@ def _build_line(spans, page, page_index, boxes: list[Box], segs: list[Segment]) 
     )
     line.blank = not line.text.strip()
     line.text_x0 = x0
+    line.word_starts = word_starts
     _detect_bullet(line, spans)
     line.level_x = line.x0
     cx, cy = (line.x0 + line.x1) / 2, (line.y0 + line.y1) / 2

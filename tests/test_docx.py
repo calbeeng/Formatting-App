@@ -96,7 +96,10 @@ def test_bullets_numbers_and_blank_lines(sample_docx):
     assert kinds[i - 1][0] == "paragraph" and sample_docx.blocks[i - 1].spacer  # one blank line kept
     assert not sample_docx.blocks[i - 2].spacer
     assert kinds[i + 1] == ("bullet", 1, "Sub bullet")
-    assert kinds[i + 2][2] == "1. First step" and kinds[i + 3][2] == "2. Second step"
+    # Word's automatic numbering becomes a real Google Docs numbered list
+    first, second = sample_docx.blocks[i + 2], sample_docx.blocks[i + 3]
+    assert (first.text, second.text) == ("First step", "Second step")
+    assert first.kind == "bullet" and first.numbered == "NUMBERED_DECIMAL_ALPHA_ROMAN" and first.level == 0
 
 
 def test_line_break_starts_new_line(sample_docx):

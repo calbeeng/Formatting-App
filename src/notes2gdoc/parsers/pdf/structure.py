@@ -45,10 +45,15 @@ PAGE_TOP_SLACK = 0.6
 
 _DECORATIVE = re.compile(r"^[\s\*\-–—_=~•·.]+$")
 
-# When a line ends in "re-" and the next starts "possess", is it "re-possess" or
-# "repossess"? Words ending in these prefixes keep their hyphen; others are
-# treated as a word broken across lines and rejoined without the hyphen.
+# A line ending in a hyphen ("decision-" / "specific", or "insol-" / "vency"):
+# is the hyphen part of the word, or was the word broken across the lines?
+# While joining lines we can't tell yet, so a LINE_HYPHEN marker goes in its
+# place. Once the whole document is read, resolve_line_hyphens() drops the
+# hyphen if the joined word ("insolvency") appears elsewhere in the document,
+# and otherwise keeps it ("decision-specific"). Words ending in these prefixes
+# always keep it ("re-possess").
 KEEP_HYPHEN_PREFIXES = {"re", "co", "pre", "non", "self", "ex", "quasi", "cross", "post", "anti", "sub"}
+LINE_HYPHEN = "\u00ad"  # soft hyphen; never left in the final text
 
 
 @dataclass
@@ -74,12 +79,50 @@ def join_line(block: Block, line: Line) -> None:
         # Word broken across lines
         _trim_trailing_space(block)
         if m.group(1).lower() not in KEEP_HYPHEN_PREFIXES:
-            _drop_last_char(block)  # remove the hyphen
+            _drop_last_char(block)  # decided later by resolve_line_hyphens
+            block.runs.append(replace(block.runs[-1], text=LINE_HYPHEN) if block.runs else Run(LINE_HYPHEN))
         block.runs = merge_runs(block.runs + _lstrip_runs(runs))
         return
     if not block.text.endswith(" "):
         block.runs.append(Run(" "))
     block.runs = merge_runs(block.runs + runs)
+
+
+_WORD = re.compile(r"[A-Za-z]+")
+_BROKEN = re.compile(r"([A-Za-z]+)" + LINE_HYPHEN + r"([A-Za-z]+)")
+
+
+def _all_blocks(blocks: list[Block]):
+    for b in blocks:
+        yield b
+        if b.table is not None:
+            for cell in b.table.cells:
+                yield from _all_blocks(cell.blocks)
+
+
+def resolve_line_hyphens(blocks: list[Block]) -> None:
+    """Replace each LINE_HYPHEN marker: nothing if the joined word is used
+    elsewhere in the document ("insol-" + "vency" -> "insolvency"), else a
+    real hyphen ("decision-" + "specific" -> "decision-specific")."""
+    every = list(_all_blocks(blocks))
+    vocab = {w.lower() for b in every for w in _WORD.findall(b.text.replace(LINE_HYPHEN, "-"))}
+    for b in every:
+        text = b.text
+        if LINE_HYPHEN not in text:
+            continue
+        # Decide each marker in order, then apply the decisions run by run
+        keep = []
+        for i, ch in enumerate(text):
+            if ch == LINE_HYPHEN:
+                left = re.search(r"[A-Za-z]+$", text[:i])
+                right = re.match(r"[A-Za-z]+", text[i + 1:])
+                joined = (left.group(0) if left else "") + (right.group(0) if right else "")
+                keep.append(joined.lower() not in vocab)
+        decisions = iter(keep)
+        b.runs = merge_runs([
+            replace(r, text="".join(("-" if next(decisions) else "") if ch == LINE_HYPHEN else ch for ch in r.text))
+            for r in b.runs
+        ])
 
 
 def _trim_trailing_space(block: Block) -> None:
@@ -145,27 +188,55 @@ def item_text_x(line: Line) -> float:
     ("a.   Adultery" -> x of "Adultery"), otherwise the line's left edge."""
     if not starts_list_item(line):
         return line.x0
-    visible = [p for p in line.pieces if p.text.strip()]
+    # The second word on the line is the first word after the marker
+    starts = [x for x in line.word_starts if x >= line.x0 - 1]
+    if len(starts) >= 2:
+        return starts[1]
     marker = _LIST_MARKER.match(line.text).group(1)
-    if len(visible) >= 2 and visible[0].text.strip() == marker:
-        return visible[1].vis_x0 if visible[1].vis_x0 is not None else visible[1].x0
-    # Marker and text in one piece: estimate (about half an em per character)
-    return line.x0 + (len(marker) + 1) * 0.5 * line.size
+    return line.x0 + (len(marker) + 1) * 0.5 * line.size  # estimate
+
+
+_SENTENCE_END = ".:;!?-–—"
+
+
+def is_new_item(open_: OpenBlock, line: Line) -> bool:
+    """Does this line start a new list item?
+
+    A line starting with a marker like "(1)" or "a." normally does, except in
+    the middle of an ordinary paragraph: in "…requirements of subsections" /
+    "(1) to (9)) the person…" the "(1)" just happens to start the next line.
+    That's recognised when the paragraph isn't itself a list item, the line
+    above doesn't end a sentence or clause, and the line lines up with it in
+    the same font size."""
+    if not starts_list_item(line):
+        return False
+    prev = open_.last.text.rstrip()
+    mid_sentence = (
+        not starts_list_item(open_.lines[0])
+        and bool(prev) and prev[-1] not in _SENTENCE_END
+        and abs(line.x0 - open_.last.x0) <= INDENT_TOLERANCE
+        and abs(line.size - open_.last.size) <= 1
+    )
+    return not mid_sentence
 
 
 def hanging_wrap(open_: OpenBlock, line: Line) -> bool:
-    """A wrapped line of a lettered item ("e. DMA ... from 1" / "July 2024")
-    lines up exactly with the text after the marker. That alignment is a strong
-    enough signal to allow looser line spacing (up to 3x the font size)."""
+    """A wrapped line of a lettered item lines up with the text after the
+    marker ("e. DMA ... from 1" / "July 2024") or with the marker itself
+    ("(a) P's personal welfare … concerning P's" / "personal welfare;"). That
+    alignment is a strong enough signal to allow looser line spacing (up to
+    3x the font size)."""
     if not starts_list_item(open_.lines[0]) or open_.block.kind != "paragraph":
         return False
     dy = line.y0 - open_.last.y0
-    return 0 < dy <= 3 * line.size and abs(line.x0 - open_.text_x) <= INDENT_TOLERANCE
+    aligned = (abs(line.x0 - open_.text_x) <= INDENT_TOLERANCE
+               or abs(line.x0 - open_.lines[0].x0) <= INDENT_TOLERANCE)
+    return 0 < dy <= 3 * line.size and aligned
 
 
 def wraps_onto(open_: OpenBlock, line: Line) -> bool:
     """Same-page continuation test: close below, at the block's text indent."""
-    if line.in_box != open_.last.in_box or starts_list_item(line):
+    if line.in_box != open_.last.in_box or is_new_item(open_, line):
         return False
     if hanging_wrap(open_, line):
         return True
@@ -346,7 +417,7 @@ def flow_blocks(lines: list[Line], page_no: int) -> list[Block]:
         # paragraph (often centred in cells) or the line is indented past the
         # bullet glyph (wrapped bullet text; its indent can differ from the
         # first line's).
-        if open_ and _close_below(open_, ln) and not starts_list_item(ln) and (
+        if open_ and _close_below(open_, ln) and not is_new_item(open_, ln) and (
             open_.block.kind == "paragraph" or ln.x0 > open_.lines[0].x0 + 2
         ):
             join_line(open_.block, ln)

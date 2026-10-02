@@ -212,14 +212,34 @@ def text_requests(
                     "fields": ",".join(fields),
                 }})
 
-    # 6. Bullets: groups of consecutive bullet paragraphs, last group first
+    # 6. Bullets: groups of consecutive list paragraphs of the same kind
+    # (ordinary bullets, or numbered with a given style), last group first
+    def list_kind(b):
+        return b.numbered if b.kind == "bullet" else None
+
+    # A numbered list also spans paragraphs sitting inside it (Block.in_list):
+    # the whole range becomes one list, then those paragraphs lose their
+    # number again, so the list's numbering carries on after them.
+    def tab_count(i):
+        b, text, _ = paras[i]
+        return len(text) - len(text.lstrip("\t")) if b.kind == "bullet" else 0
+
     groups: list[tuple[int, int]] = []
     k = 0
     while k < len(paras):
         if paras[k][0].kind == "bullet":
             g = k
-            while g + 1 < len(paras) and paras[g + 1][0].kind == "bullet":
-                g += 1
+            while True:
+                j = g + 1
+                if paras[k][0].numbered:
+                    while j < len(paras) and paras[j][0].in_list:
+                        j += 1
+                if (j < len(paras) and paras[j][0].kind == "bullet"
+                        and list_kind(paras[j][0]) == list_kind(paras[k][0])
+                        and not paras[j][0].list_start):
+                    g = j
+                else:
+                    break
             groups.append((k, g))
             k = g + 1
         else:
@@ -227,8 +247,22 @@ def text_requests(
     for first, last in reversed(groups):
         reqs.append({"createParagraphBullets": {
             "range": _range(starts[first], starts[last] + len(paras[last][1]) + 1, tab_id),
-            "bulletPreset": bullet_preset,
+            "bulletPreset": paras[first][0].numbered or bullet_preset,
         }})
+        removed = 0  # tabs already consumed by this group's items above
+        for i in range(first, last + 1):
+            b, text, _ = paras[i]
+            if b.kind != "bullet":
+                s0 = starts[i] - removed
+                rng = _range(s0, s0 + len(text) + 1, tab_id)
+                indent = {"magnitude": LIST_INDENT_PT * b.level, "unit": "PT"}
+                reqs.append({"deleteParagraphBullets": {"range": rng}})
+                reqs.append({"updateParagraphStyle": {
+                    "range": rng,
+                    "paragraphStyle": {"indentStart": indent, "indentFirstLine": indent},
+                    "fields": "indentStart,indentFirstLine",
+                }})
+            removed += tab_count(i)
 
     tabs = sum(len(text) - len(text.lstrip("\t")) for b, text, _ in paras if b.kind == "bullet")
     return reqs, len(body) - tabs

@@ -161,8 +161,9 @@ def test_multifactor_sample():
 def test_mgmt_sample():
     doc = parse_sample(MGMT)
     assert find(doc, "Learning Objectives", "heading")
-    objectives = [b.text for b in doc.blocks if b.page == 2 and b.kind == "paragraph"]
-    assert objectives[0].startswith("1. Understand core competencies")
+    objectives = [b for b in doc.blocks if b.page == 2 and b.kind == "bullet"]
+    assert objectives[0].text.startswith("Understand core competencies") and objectives[0].numbered
+    assert len(objectives) == 7
     assert sum(1 for b in doc.blocks if b.kind == "image") >= 10
     assert not any("text alternative" in b.text.lower() for b in doc.blocks)
     assert not any("all rights reserved" in b.text.lower() for b in doc.blocks if b.selected)
