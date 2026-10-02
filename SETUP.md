@@ -119,12 +119,19 @@ roughly once a week. Only the test users from step 5 can sign in.
    domain** they're on. Until those are filled in, **Publish app** stays greyed
    out ("To publish your app, you must complete your configuration on the
    Branding page"). A free GitHub Pages site (`yourname.github.io`) can host
-   both pages; this will be set up alongside the downloadable builds in Phase 4.
+   both pages. For this project they are:
+   - App home page: `https://calbeeng.github.io/Formatting-App/`
+   - Privacy policy: `https://calbeeng.github.io/Formatting-App/privacy.html`
+   - Authorized domain: `calbeeng.github.io`
 2. Then go to **Google Auth platform** → **Audience** → under **Publishing status**,
    click **Publish app**, then **Confirm**. The status becomes **In production**.
-3. You don't need to submit it for Google's review. Unreviewed apps are
+   Google's dialog mentions "submit for verification": that's only needed for
+   more than 100 users, so ignore it.
+3. **Sign in again once** (in the app: **Sign out**, then **Sign in with Google**).
+   Sign-ins given while in Testing still expire after 7 days; new ones don't.
+4. You don't need to submit it for Google's review. Unreviewed apps are
    allowed for personal use by fewer than 100 people.
-4. What changes:
+5. What changes:
    - Sign-ins no longer expire after 7 days. They last until you sign out,
      remove access, or don't use the app for about 6 months.
    - The sign-in screen still shows **"Google hasn't verified this app"**.
