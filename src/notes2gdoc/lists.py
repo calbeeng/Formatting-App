@@ -146,6 +146,11 @@ def _convert_list(items: list[Block]) -> bool:
         while lvl <= prev_level:
             lvl += 3
         levels[typ] = prev_level = lvl
+    # A list with no top-level item (just "a.", "b.", e.g. in a table cell):
+    # Google Docs ignores the nesting then and shows "1., 2." pushed to the
+    # right, so keep the typed letters instead.
+    if min(levels.values()) > 0:
+        return False
     for b, mtext, typ, _rank in parsed:
         b.kind = "bullet"
         b.numbered = preset
