@@ -14,12 +14,10 @@ Go to the **[download page](../../releases/latest)** and download the file for y
 
 | Your computer | File |
 |---|---|
-| Mac with an Apple chip (M1, M2, M3, M4…; most Macs from 2021 on) | `NotesToGoogleDocs-Mac-AppleChip.zip` |
-| Older Mac with an Intel processor | `NotesToGoogleDocs-Mac-Intel.zip` |
+| Mac (Apple chip: M1, M2, M3, M4…) | `NotesToGoogleDocs-Mac-AppleChip.zip` |
 | Windows | `NotesToGoogleDocs-Windows.exe` |
 
-Not sure which Mac you have? Apple menu  → **About This Mac** → look for
-**Chip** (Apple) or **Processor** (Intel).
+(Older Intel Macs aren't supported by the download; they can run it from source, see below.)
 
 ### Mac: first-time opening
 
@@ -93,8 +91,8 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-After about 15 minutes the new files appear on the download page. Every push to
-`main` also builds and self-tests all three versions (see the **Actions** tab).
+After about 10 minutes the new files appear on the download page. Every push to
+`main` also builds and self-tests both versions (see the **Actions** tab).
 
 ### Run from source (fallback)
 

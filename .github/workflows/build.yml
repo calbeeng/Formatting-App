@@ -1,6 +1,6 @@
-# Builds the app for Windows and Mac on GitHub's computers.
+# Builds the app for Windows and Mac (Apple chip) on GitHub's computers.
 #
-# - Every push to main: run the tests and build all three versions (downloadable
+# - Every push to main: run the tests and build both versions (downloadable
 #   from the run's "Artifacts" section for a few days, to try things out).
 # - Pushing a version tag like v1.0.0: also publish a Release with the files,
 #   which gives a permanent download page to share.
@@ -31,9 +31,8 @@ jobs:
           - os: macos-14            # Apple silicon (M1, M2, M3, M4...)
             label: Mac (Apple chip)
             file: NotesToGoogleDocs-Mac-AppleChip.zip
-          - os: macos-15-intel      # older Intel Macs
-            label: Mac (Intel)
-            file: NotesToGoogleDocs-Mac-Intel.zip
+          # Intel Macs aren't built (not needed). To add them back, add:
+          #   - os: macos-15-intel / label: Mac (Intel) / file: NotesToGoogleDocs-Mac-Intel.zip
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     defaults:
@@ -105,10 +104,7 @@ jobs:
           files: files/*
           body: |
             **Download the file for your computer:**
+            - Mac (Apple chip: M1/M2/M3/M4…): `NotesToGoogleDocs-Mac-AppleChip.zip`
             - Windows: `NotesToGoogleDocs-Windows.exe`
-            - Mac with an Apple chip (M1/M2/M3/M4, most Macs from 2021 on): `NotesToGoogleDocs-Mac-AppleChip.zip`
-            - Older Mac with an Intel processor: `NotesToGoogleDocs-Mac-Intel.zip`
-
-            Not sure which Mac you have? Apple menu → **About This Mac** → look for **Chip** (Apple) or **Processor** (Intel).
 
             First time opening it? See the install steps in the README.
