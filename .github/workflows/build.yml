@@ -1,0 +1,105 @@
+# Builds the app for Windows and Mac on GitHub's computers.
+#
+# - Every push to main: run the tests and build all three versions (downloadable
+#   from the run's "Artifacts" section for a few days, to try things out).
+# - Pushing a version tag like v1.0.0: also publish a Release with the files,
+#   which gives a permanent download page to share.
+#
+# Each built app runs its own --self-test before it's accepted, so a broken
+# Mac build shows a red X here instead of reaching anyone's computer.
+
+name: Build apps
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            file: NotesToGoogleDocs-Windows.exe
+          - os: macos-14            # Apple silicon (M1, M2, M3, M4...)
+            label: Mac (Apple chip)
+            file: NotesToGoogleDocs-Mac-AppleChip.zip
+          - os: macos-15-intel      # older Intel Macs
+            label: Mac (Intel)
+            file: NotesToGoogleDocs-Mac-Intel.zip
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" pyinstaller pillow
+
+      - name: Run the tests
+        # Tests that need the (private) course PDFs skip themselves here.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Build the app
+        run: pyinstaller notes2gdoc.spec --noconfirm
+
+      - name: Self-test the built app (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          ./dist/NotesToGoogleDocs.exe --self-test || { cat "$TEMP/notes2gdoc-self-test.log"; exit 1; }
+          cat "$TEMP/notes2gdoc-self-test.log"
+          mv dist/NotesToGoogleDocs.exe "${{ matrix.file }}"
+
+      - name: Self-test the built app (Mac)
+        if: runner.os == 'macOS'
+        run: |
+          "dist/Notes to Google Docs.app/Contents/MacOS/Notes to Google Docs" --self-test
+          # ditto keeps the .app bundle intact inside the zip
+          ditto -c -k --keepParent "dist/Notes to Google Docs.app" "${{ matrix.file }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.file }}
+          path: ${{ matrix.file }}
+          retention-days: 7
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: files/*
+          body: |
+            **Download the file for your computer:**
+            - Windows: `NotesToGoogleDocs-Windows.exe`
+            - Mac with an Apple chip (M1/M2/M3/M4, most Macs from 2021 on): `NotesToGoogleDocs-Mac-AppleChip.zip`
+            - Older Mac with an Intel processor: `NotesToGoogleDocs-Mac-Intel.zip`
+
+            Not sure which Mac you have? Apple menu → **About This Mac** → look for **Chip** (Apple) or **Processor** (Intel).
+
+            First time opening it? See the install steps in the README.

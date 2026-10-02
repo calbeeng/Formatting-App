@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+
+# Course materials are copyrighted: never publish them or text extracted from them
+Samples/
+samples/
+*.pdf
+*.docx
+*.pptx
+tests/golden/
+*.outline.txt
+
+# Secrets and per-user state - never commit these
+client_secret*.json
+token*.json
+credentials*.json
+account.json
+recent.json
+settings.json
+
+# Machine-specific
+*.lnk
+.claude/
+
+# Debug output
+dry_run*/
+dry_run*.json
+*.outline.debug.txt

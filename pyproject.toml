@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "notes2gdoc"
+version = "0.1.0"
+description = "Extract structured text from study files (PDF, later Word/PowerPoint) and append it to a Google Doc with clean formatting."
+requires-python = ">=3.11"
+dependencies = [
+    "pymupdf>=1.24",
+    "platformdirs>=4",
+    "PySide6>=6.6",
+    "google-api-python-client>=2.100",
+    "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+notes2gdoc = "notes2gdoc.cli:main"
+
+# A windowed launcher (no black console window) for double-clicking
+[project.gui-scripts]
+notes2gdoc-app = "notes2gdoc.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+notes2gdoc = ["resources/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
