@@ -426,3 +426,23 @@ def test_highlight_cell_colour_and_blank_lines():
         if "updateTextStyle" in r:
             style = r["updateTextStyle"]["textStyle"]
             assert "backgroundColor" not in style and "foregroundColor" not in style
+
+
+def test_paragraphs_flush_left_by_default():
+    """The target doc's Normal style may have a hanging indent (18pt/36pt);
+    appended headings and paragraphs start at the margin anyway."""
+    blocks = [
+        Block("heading", [Run("Bonds")], style_key="word_h3"),
+        Block("paragraph", [Run("(1) Defining (debt obligations + security): Instruments creating …")]),
+        Block("bullet", [Run("The issuer promises to repay")]),
+    ]
+    doc, _ = append(blocks)
+    styles = {text: st for st, text in _para_styles(doc)}
+    for text in ("Bonds", "(1) Defining (debt obligations + security): Instruments creating …"):
+        assert styles[text]["indentStart"]["magnitude"] == 0
+        assert styles[text]["indentFirstLine"]["magnitude"] == 0
+    assert "indentStart" not in styles["The issuer promises to repay"] or \
+        styles["The issuer promises to repay"]["indentStart"]["magnitude"] == 0  # bullets: list decides
+    doc2, _ = append(blocks, settings=Settings(flush_left=False))
+    styles2 = {text: st for st, text in _para_styles(doc2)}
+    assert "indentStart" not in styles2["Bonds"]

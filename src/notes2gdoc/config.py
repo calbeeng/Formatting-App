@@ -49,6 +49,9 @@ class Settings:
     last_doc_url: str = ""
     # Justify all appended text (pictures are always centred)
     justify_text: bool = True
+    # Start appended paragraphs and headings at the left margin, even if the
+    # Google Doc's "Normal text" style has an indent (list items keep theirs)
+    flush_left: bool = True
 
     def named_style(self, style_key: str | None) -> str:
         return self.heading_map.get(style_key or "", "NORMAL_TEXT")
@@ -77,6 +80,7 @@ class Settings:
         )
         settings.last_doc_url = str(data.get("last_doc_url", ""))
         settings.justify_text = bool(data.get("justify_text", settings.justify_text))
+        settings.flush_left = bool(data.get("flush_left", settings.flush_left))
         return settings
 
     def save(self, path: Path | None = None) -> None:

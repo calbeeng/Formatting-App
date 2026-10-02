@@ -67,7 +67,10 @@ class SettingsDialog(QDialog):
         self.skip_boilerplate.setChecked(settings.skip_boilerplate_slides)
         self.justify = QCheckBox("Justify text (pictures are always centred)")
         self.justify.setChecked(settings.justify_text)
+        self.flush_left = QCheckBox("Start paragraphs at the left margin (ignore the doc's Normal-text indent)")
+        self.flush_left.setChecked(settings.flush_left)
         layout.addWidget(self.justify)
+        layout.addWidget(self.flush_left)
         layout.addWidget(self.strip_colour)
         layout.addWidget(self.skip_boilerplate)
 
@@ -84,6 +87,7 @@ class SettingsDialog(QDialog):
         self.strip_colour.setChecked(False)
         self.skip_boilerplate.setChecked(True)
         self.justify.setChecked(True)
+        self.flush_left.setChecked(True)
 
     def apply(self) -> bool:
         """Copy the choices into settings and save. Returns True if the file
@@ -92,6 +96,7 @@ class SettingsDialog(QDialog):
             self.settings.heading_map[key] = combo.currentData()
         self.settings.strip_colour = self.strip_colour.isChecked()
         self.settings.justify_text = self.justify.isChecked()
+        self.settings.flush_left = self.flush_left.isChecked()
         reparse = self.settings.skip_boilerplate_slides != self.skip_boilerplate.isChecked()
         self.settings.skip_boilerplate_slides = self.skip_boilerplate.isChecked()
         self.settings.save()

@@ -168,9 +168,12 @@ def text_requests(
         }})
         i = j + 1
 
-    # Table cells: always flush left, even if the doc's Normal text style has
-    # an indent (a narrow cell with a hanging indent looks broken).
-    if flush_left:
+    # Flush left: headings and paragraphs start at the left margin even if the
+    # doc's Normal text style has an indent (Settings.flush_left; always in
+    # table cells, where a hanging indent in a narrow cell looks broken).
+    # Bullets get their indent from the list, and quotes inside lists get
+    # theirs just below.
+    if flush_left or settings.flush_left:
         for (b, text, _), start in zip(paras, starts):
             if b.kind != "bullet" and not (b.kind == "paragraph" and b.level > 0):
                 reqs.append(zero_indent_request(start, start + len(text) + 1, tab_id))
