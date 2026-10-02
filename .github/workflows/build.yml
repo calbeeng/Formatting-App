@@ -40,9 +40,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -63,14 +63,23 @@ jobs:
       - name: Self-test the built app (Windows)
         if: runner.os == 'Windows'
         run: |
-          ./dist/NotesToGoogleDocs.exe --self-test || { cat "$TEMP/notes2gdoc-self-test.log"; exit 1; }
+          if ! ./dist/NotesToGoogleDocs.exe --self-test; then
+            while IFS= read -r line; do echo "::error::$line"; done < "$TEMP/notes2gdoc-self-test.log"
+            exit 1
+          fi
           cat "$TEMP/notes2gdoc-self-test.log"
           mv dist/NotesToGoogleDocs.exe "${{ matrix.file }}"
 
       - name: Self-test the built app (Mac)
         if: runner.os == 'macOS'
         run: |
-          "dist/Notes to Google Docs.app/Contents/MacOS/Notes to Google Docs" --self-test
+          # Show any failure as an error note on the run's summary page
+          if ! out=$("dist/Notes to Google Docs.app/Contents/MacOS/Notes to Google Docs" --self-test 2>&1); then
+            echo "$out"
+            echo "$out" | tail -n 40 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          echo "$out"
           # ditto keeps the .app bundle intact inside the zip
           ditto -c -k --keepParent "dist/Notes to Google Docs.app" "${{ matrix.file }}"
 
