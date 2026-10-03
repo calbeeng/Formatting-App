@@ -19,7 +19,8 @@ import pymupdf as fitz
 
 from ...model import Run
 from .layout import Box, Segment, analyse_drawings
-from .regions import DiagramRegion, TableRegion, find_diagrams, find_pictures, find_ruled_tables, find_tables
+from .regions import (DiagramRegion, TableRegion, add_title_row, find_diagrams, find_pictures,
+                      find_ruled_tables, find_tables)
 
 # Fonts whose characters are pictures, not letters. A line starting with one of
 # their characters (e.g. Wingdings "Ø", which displays as an arrow) is a bullet.
@@ -175,6 +176,9 @@ def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | N
     tables += find_ruled_tables(page, drawings,
                                 _table_texts([sp for sp in visible if not _page_number(sp, page)]),
                                 [t.rect for t in tables])
+    for t in tables:
+        if t.ruled:
+            _title_row_above(t, visible, page)
     diagrams = find_diagrams(page, drawings, [_rect(sp) for sp in visible], [t.rect for t in tables])
     diagrams += find_pictures(page, repeated_images or set(), [r.rect for r in [*tables, *diagrams]],
                               [_rect(sp) for sp in visible])
@@ -389,6 +393,42 @@ def _words(spans: list[_Span]) -> list[tuple[float, float]]:
 
 
 _LONE_MARKER = re.compile(r"^\(?(\d{1,3}|[a-zA-Z]|[ivxIVX]{1,4})[.)]$")
+
+
+# A bold line this close (points) above a ruled table's top rule is its title
+TITLE_ROW_GAP = 16
+
+
+def _title_row_above(table: TableRegion, lines: list[list[_Span]], page: fitz.Page) -> None:
+    """A bold line sitting right on top of a ruled table ("Code of Practice,
+    Section 8.5", "Persons disqualified to issue certificates…") is the
+    table's title: it becomes a first row across the whole table. Not if the
+    table already starts with such a row, if the line is in the slide's
+    title area, starts a list item, or is the end of a paragraph above it."""
+    first = [c for c in table.cells if c.row == 0]
+    if len(first) == 1 and first[0].colspan == table.n_cols:
+        return
+    above = [sp for sp in lines if _rect(sp).y1 <= table.rect.y0 + 1]
+    if not above:
+        return
+    line = max(above, key=lambda sp: _rect(sp).y1)
+    r = _rect(line)
+    if table.rect.y0 - r.y1 > TITLE_ROW_GAP or r.y0 < page.rect.height * 0.2:
+        return
+    text = "".join(ch.c for s in line for ch in s.chars).strip()
+    visible = [s for s in line if any(not ch.c.isspace() for ch in s.chars)]
+    bold = all(s.flags & 16 or _BOLD_FONT.search(s.font) for s in visible)
+    if not bold or re.match(r"^\(?(\d{1,3}|[a-zA-Z]|[ivxIVX]{1,4})[.)]\s", text):
+        return
+    size = max(s.size for s in visible)
+    prev = [sp for sp in above if sp is not line and _rect(sp).y1 <= r.y0 + 1]
+    if prev:
+        p = max(prev, key=lambda sp: _rect(sp).y1)
+        p_size = max(s.size for s in p)
+        same_size = abs(p_size - size) <= 0.15 * size
+        if same_size and r.y0 - _rect(p).y1 < 0.3 * size:
+            return  # the last line of a paragraph, not a title
+    add_title_row(table, r)
 
 
 def _table_texts(lines: list[list[_Span]]) -> list[tuple[fitz.Rect, list[float], list[tuple[float, float]]]]:

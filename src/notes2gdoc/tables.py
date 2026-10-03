@@ -36,7 +36,17 @@ def _continues(prev: Block, b: Block, last_page: int, layout: str) -> bool:
     then "Section 12(4) & (5) | …")."""
     return (layout == "slides" and prev.table.n_cols == b.table.n_cols >= 2
             and not _has_header(prev.table) and not _has_header(b.table)
-            and 0 <= b.page - last_page <= 1)
+            and 0 <= b.page - last_page <= 1 and _similar_columns(prev.table, b.table))
+
+
+def _similar_columns(a, b) -> bool:
+    """Column widths in about the same proportions (a narrow "Section 13(1)"
+    label column doesn't match two equal "Personal Welfare | Property &
+    Affairs" columns)."""
+    if not a.col_widths or not b.col_widths:
+        return True
+    sa, sb = sum(a.col_widths), sum(b.col_widths)
+    return all(abs(x / sa - y / sb) <= 0.15 for x, y in zip(a.col_widths, b.col_widths))
 
 
 def merge_split_tables(doc: Document) -> None:

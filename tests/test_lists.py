@@ -153,8 +153,10 @@ def test_mca_deck_round_two():
     assert table_with("Section 6(1)").n_cols == 2                      # slide 11
     # Two columns of bullets side by side (slides 33, 35, 68)
     duties = table_with("Follow the statutory principles")
-    assert duties.n_cols == 2 and "Keep accounts" in duties.cell(0, 1).text
-    assert "NOTE" in table_with("Family member of donor").cell(0, 1).text
+    assert duties.n_cols == 2 and "Keep accounts" in duties.cell(1, 1).text
+    assert duties.cell(0, 0).text == "Code of Practice, Section 8.5"   # the bold line above it
+    disq = table_with("Family member of donor")
+    assert disq.cell(0, 0).text.startswith("Persons disqualified") and "NOTE" in disq.cell(1, 1).text
     powers = table_with("where P is to live")
     assert (powers.cell(0, 0).text, powers.cell(0, 1).text) == ("Personal Welfare", "Property & Affairs")
     assert "conduct of legal proceedings" in powers.cell(1, 1).text
@@ -184,7 +186,10 @@ def test_mca_deck_round_three():
     assert t.cell(1, 0).text == "Section 21" and "Part 5 Rule 8(4)" in t.cell(1, 1).text
     # Public Guardian functions: two columns of a numbered list
     pg = next(b for b in doc.blocks if b.kind == "table" and "Establishing & maintaining" in b.text).table
-    assert pg.n_cols == 2 and "place to furnish such information" in pg.cell(0, 1).text
+    assert pg.n_cols == 2 and "place to furnish such information" in pg.cell(1, 1).text
+    assert pg.cell(0, 0).text == "Sections 31 & 32, MCA: -"
+    # Slide 30's narrow label table doesn't swallow slide 31's two equal columns
+    assert next(b for b in doc.blocks if b.kind == "table" and "Section 13(1)" in b.text).table.n_rows == 1
 
 
 def test_mca_deck_round_four():

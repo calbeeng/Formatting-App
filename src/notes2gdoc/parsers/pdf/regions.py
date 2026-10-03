@@ -52,6 +52,7 @@ class TableRegion:
     # Ruled tables: x where each column's text starts. A text line running
     # across one of these (a label and its text on one line) is cut there.
     splits: list[float] = field(default_factory=list)
+    ruled: bool = False  # found by find_ruled_tables (rules only, no grid)
 
     @property
     def y0(self) -> float:
@@ -190,6 +191,8 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
             region = longer
     if region is None and bands:
         region = _one_column_table(bands, x0, x1)
+    if region is not None:
+        region.ruled = True
     return [region] if region else []
 
 
@@ -441,3 +444,14 @@ def find_pictures(page: fitz.Page, skip: set[int], exclude: list[fitz.Rect],
             png = page.get_pixmap(clip=r, dpi=DIAGRAM_DPI).tobytes("png")
             out.append(DiagramRegion(r, [], png))
     return out
+
+
+def add_title_row(table: TableRegion, rect: fitz.Rect) -> None:
+    """Make the text in `rect` (just above the table) its first row, one cell
+    across the whole width."""
+    for c in table.cells:
+        c.row += 1
+    table.cells.insert(0, CellSpec(0, 0, fitz.Rect(table.rect.x0, rect.y0 - 1, table.rect.x1, table.rect.y0),
+                                   colspan=table.n_cols))
+    table.n_rows += 1
+    table.rect = fitz.Rect(table.rect.x0, rect.y0 - 1, table.rect.x1, table.rect.y1)

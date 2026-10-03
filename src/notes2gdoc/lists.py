@@ -189,6 +189,7 @@ def _hang_literal_items(blocks: list[Block], in_cell: bool = False) -> None:
     order: list[str] = []
     last: dict[str, int] = {}
     item_level: int | None = None   # level of the last item, while in a run
+    base = 0
     for b in blocks:
         if _is_item(b):
             typed = _classify(marker_of(b.text)[0], last)
@@ -198,8 +199,10 @@ def _hang_literal_items(blocks: list[Block], in_cell: bool = False) -> None:
             last[typ] = val
             if typ not in order:
                 order.append(typ)
+            if item_level is None:
+                base = b.level  # already indented (e.g. under a bullet): keep that
             b.hanging = True
-            b.level = item_level = order.index(typ)
+            b.level = item_level = base + order.index(typ)
             continue
         if item_level is not None and b.kind == "bullet" and not b.numbered:
             b.level += item_level + 1
