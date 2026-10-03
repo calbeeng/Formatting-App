@@ -37,8 +37,9 @@ def test_flowchart_is_picture(divorce):
 def test_side_by_side_boxes_are_not_a_picture(divorce):
     page = [b for b in divorce.blocks if b.page == 18]
     assert not any(b.kind == "image" for b in page)
-    # A letters-only list ("a. … e.", no "1." above it) keeps its typed letters:
-    # Google Docs can't show letters at the top level of a list
-    dma = find(divorce, "e. DMA")
+    # The two boxes side by side are a comparison: a two-column table
+    t = next(b for b in page if b.kind == "table").table
+    assert t.n_cols == 2 and t.cell(0, 0).text.startswith("WOMEN")
+    dma = next(b for b in t.cell(0, 0).blocks if b.text.startswith("e. DMA"))
     assert dma.text == "e. DMA (Divorce by Mutual Agreement) from 1 July 2024"
-    assert not dma.numbered
+    assert not dma.numbered  # letters only, no "1." above: keeps its typed letters

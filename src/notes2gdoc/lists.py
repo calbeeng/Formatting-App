@@ -262,8 +262,8 @@ _PROSE_CHARS = 60
 
 def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
     """Slide text without bullets of its own reads as a list of points, so make
-    each paragraph a bullet. Slides that already have bullets ("•", "1.",
-    "(a)") keep their own format. `indent_of(block)` gives a paragraph's left
+    each paragraph a bullet. Slides that already have bullets ("•") or typed
+    numbers ("1.", "(a)") keep their own format. `indent_of(block)` gives a paragraph's left
     edge, to spot text indented under the paragraph above it.
 
     * A paragraph ending ":" with indented text under it ("NOTE: Section 6(11)
@@ -279,6 +279,11 @@ def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
     out: list[Block] = []
     last_item: Block | None = None    # most recent typed list item
     point: Block | None = None        # most recent plain point
+    # A slide with typed numbering ("1.", "2.") already has its own list
+    # format: lines between the items (e.g. "Who are 'relevant persons'?")
+    # stay plain text instead of becoming bullets.
+    numbered_slide = any(b.kind == "paragraph" and not b.spacer and marker_of(b.text) for b in blocks)
+    plain_points: set[int] = set()
     for b in blocks:
         if b.kind != "paragraph" or b.spacer:
             out.append(b)
@@ -302,8 +307,11 @@ def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
             out.append(b)
             last_item = point = None
             continue
-        b.kind, b.level = "bullet", 0
-        b.note = (b.note + "; " if b.note else "") + "slide paragraph -> bullet"
+        if numbered_slide:
+            plain_points.add(id(b))
+        else:
+            b.kind, b.level = "bullet", 0
+            b.note = (b.note + "; " if b.note else "") + "slide paragraph -> bullet"
         out.append(b)
         point, last_item = b, None
 
@@ -312,7 +320,8 @@ def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
     for i, b in enumerate(out):
         nxt = out[i + 1] if i + 1 < len(out) else None
         m = marker_of(nxt.text) if nxt is not None and nxt.kind == "paragraph" else None
-        if b.kind == "bullet" and not b.numbered and m and m[0].lower() in ("a", "i"):
+        is_point = (b.kind == "bullet" and not b.numbered) or id(b) in plain_points
+        if is_point and m and m[0].lower() in ("a", "i"):
             prev = out[i - 1] if i else None
             continuing = prev is not None and prev.kind == "paragraph" and marker_of(prev.text)
             n = n + 1 if continuing else 1

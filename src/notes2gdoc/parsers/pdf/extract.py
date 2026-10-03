@@ -89,6 +89,9 @@ class Line:
     word_starts: list[float] = field(default_factory=list)
     page_width: float = 0.0
     page_height: float = 0.0
+    # Inside a process banner (a row of chevrons/boxes such as "1. Documents >
+    # 2. Issue Certificate > 3. Registration"): the step this slide is about
+    banner: bool = False
 
     @property
     def text(self) -> str:
@@ -162,6 +165,11 @@ def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | N
     raw_lines = [sp for sp in (_drop_number_span(sp, page) for sp in _raw_lines(page))
                  if sp and not _page_number(sp, page)]
 
+    # Process banners: the steps that aren't the current one are written in
+    # near-white, barely visible on the light boxes. Leave those out.
+    banners = _banner_boxes(drawings)
+    raw_lines = [sp for sp in (_drop_faint(sp, banners) for sp in raw_lines) if sp]
+
     visible = [sp for sp in raw_lines if _visible(sp)]
     tables = find_tables(page, drawings)
     tables += find_ruled_tables(page, drawings,
@@ -231,8 +239,57 @@ def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | N
         for region in [*tables, *diagrams]:
             items.append((0 if region.y0 < col_top else 3, region.y0, region))
 
+    for _, _, it in items:
+        if isinstance(it, Line) and banners:
+            c = fitz.Point((it.x0 + it.x1) / 2, (it.y0 + it.y1) / 2)
+            it.banner = any(r.contains(c) for r in banners)
     items.sort(key=lambda it: (it[0], it[1]))
     return [it[2] for it in items]
+
+
+def _banner_boxes(drawings: list[dict]) -> list[fitz.Rect]:
+    """Boxes forming a process banner: 3+ light filled shapes of the same
+    height, side by side (touching or overlapping, like chevrons). Dark boxes
+    with white text, like a table's header row, aren't banners."""
+    def looks_light(d) -> bool:
+        # The colour you see: the fill blended with the white page by its
+        # opacity (the chevrons are black at 10% opacity = light grey)
+        alpha = d.get("fill_opacity") if d.get("fill_opacity") is not None else 1.0
+        lum = sum(d["fill"]) / 3
+        return 1 - alpha * (1 - lum) > 0.7
+
+    boxes = sorted((fitz.Rect(d["rect"]) for d in drawings
+                    if d.get("fill") is not None and looks_light(d) and 50 <= d["rect"].width <= 400
+                    and 15 <= d["rect"].height <= 150), key=lambda r: r.x0)
+    out: list[fitz.Rect] = []
+    used: set[int] = set()
+    for i, r in enumerate(boxes):
+        if i in used:
+            continue
+        row = [r]
+        for j in range(i + 1, len(boxes)):
+            o = boxes[j]
+            if (abs(o.y0 - r.y0) <= 4 and abs(o.y1 - r.y1) <= 4
+                    and o.x0 - row[-1].x1 <= 30 and o.x0 > row[-1].x0):
+                row.append(o)
+                used.add(j)
+        if len(row) >= 3:
+            out.extend(row)
+    return out
+
+
+def _drop_faint(spans: list[_Span], banners: list[fitz.Rect]) -> list[_Span]:
+    """Remove near-white text sitting in a process banner box."""
+    if not banners:
+        return spans
+    keep = []
+    for s in spans:
+        r, g, b = (s.color >> 16) & 255, (s.color >> 8) & 255, s.color & 255
+        c = fitz.Point((s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2)
+        if min(r, g, b) >= 0xE0 and any(box.contains(c) for box in banners):
+            continue
+        keep.append(s)
+    return keep
 
 
 def _build_diagram_text(d: DiagramRegion, page, page_index, boxes) -> None:
@@ -331,6 +388,9 @@ def _words(spans: list[_Span]) -> list[tuple[float, float]]:
     return [(a, b) for a, b in out]
 
 
+_LONE_MARKER = re.compile(r"^\(?(\d{1,3}|[a-zA-Z]|[ivxIVX]{1,4})[.)]$")
+
+
 def _table_texts(lines: list[list[_Span]]) -> list[tuple[fitz.Rect, list[float], list[tuple[float, float]]]]:
     """(box, style breaks, words) per text line, for finding ruled tables. A bullet
     glyph that PyMuPDF keeps as its own line ("•" ... "Keep accounts") is
@@ -338,15 +398,19 @@ def _table_texts(lines: list[list[_Span]]) -> list[tuple[fitz.Rect, list[float],
     a column edge."""
     rects = [(_rect(sp), _style_breaks(sp), "".join(ch.c for s in sp for ch in s.chars).strip(), _words(sp))
              for sp in lines]
+
+    def is_glyph(text: str) -> bool:  # a bullet, or a list number like "10."
+        return text in BULLET_GLYPHS or bool(_LONE_MARKER.match(text))
+
     out = []
     for r, brk, text, words in rects:
-        if text in BULLET_GLYPHS:
+        if is_glyph(text):
             mate = next((o for o in rects if o[2] != text and 0 < o[0].x0 - r.x1 <= 40
                          and min(o[0].y1, r.y1) - max(o[0].y0, r.y0) > 0.5 * r.height), None)
             if mate is not None:
                 continue  # covered by its text's box below
         else:
-            glyph = next((o for o in rects if o[2] in BULLET_GLYPHS and 0 < r.x0 - o[0].x1 <= 40
+            glyph = next((o for o in rects if is_glyph(o[2]) and 0 < r.x0 - o[0].x1 <= 40
                           and min(o[0].y1, r.y1) - max(o[0].y0, r.y0) > 0.5 * r.height), None)
             if glyph is not None:
                 r = fitz.Rect(glyph[0].x0, r.y0, r.x1, r.y1)

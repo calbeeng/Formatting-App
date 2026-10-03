@@ -138,7 +138,8 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
     `texts` holds each text line's box and the x positions where its style
     changes at the start of a word (see extract._style_breaks).
 
-    * Rows are the bands between rules (at least 2 rules).
+    * Rows are the bands between rules; the text below the last rule can
+      be a last row too.
     * Column boundaries come from empty vertical gaps between the text in a
       row. A gap counts only if no line in any row runs across it (rows of a
       single line, maybe a header, don't count), unless that
@@ -159,7 +160,7 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
     for r in rules:
         if not ys or r.y0 - ys[-1] > 3:
             ys.append((r.y0 + r.y1) / 2)
-    if len(ys) < 2:
+    if not ys:
         return []
     x0 = min(r.x0 for r in rules)
     x1 = max(r.x1 for r in rules)
@@ -171,20 +172,23 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
         rows = [(r, w, ws) for r, w, ws in texts if top < (r.y0 + r.y1) / 2 < bottom and x0 <= r.x0 and r.x1 <= x1 + 2]
         if rows:
             bands.append((top, bottom, rows))
-    if not bands:
-        return []
 
-    region = _table_from_bands(bands, x0, x1)
-    if region is None:
-        # The last row may have no rule under it (Powers of Court: rules only
-        # around the "Personal Welfare | Property & Affairs" header): try
-        # again with the text below the last rule as a final row.
-        below = [t for t in texts if (t[0].y0 + t[0].y1) / 2 > ys[-1]
-                 and (t[0].y0 + t[0].y1) / 2 <= page.rect.height * 0.95 and x0 - 2 <= t[0].x0 and t[0].x1 <= x1 + 2]
-        if below:
-            bottom = max(t[0].y1 for t in below) + 2
-            region = _table_from_bands(bands + [(ys[-1], bottom, below)], x0, x1)
-    if region is None:
+    region = _table_from_bands(bands, x0, x1) if bands else None
+    # The last row may have no rule under it (Powers of Court: rules only
+    # around the "Personal Welfare | Property & Affairs" header; Deputies:
+    # the "Section 21" row runs to the bottom of the slide). Try again with
+    # the text below the last rule as a final row, and keep that if it fits
+    # the same columns (or makes a table where there was none).
+    below = [t for t in texts if (t[0].y0 + t[0].y1) / 2 > ys[-1]
+             and (t[0].y0 + t[0].y1) / 2 <= page.rect.height and x0 - 2 <= t[0].x0 and t[0].x1 <= x1 + 2]
+    if below:
+        bottom = max(t[0].y1 for t in below) + 2
+        longer = _table_from_bands(bands + [(ys[-1], bottom, below)], x0, x1)
+        footer = longer is not None and longer.n_cols > 1 and any(
+            c.row == longer.n_rows - 1 and c.colspan == longer.n_cols for c in longer.cells)
+        if longer is not None and not footer and (region is None or longer.n_cols == region.n_cols):
+            region = longer
+    if region is None and bands:
         region = _one_column_table(bands, x0, x1)
     return [region] if region else []
 

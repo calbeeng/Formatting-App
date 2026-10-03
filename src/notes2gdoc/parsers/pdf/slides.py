@@ -3,6 +3,8 @@
 Each slide becomes:
 * a heading (style key "slide_title") from the title at the top of the slide,
 * optionally a sub-heading ("slide_subtitle") for a bold line right under it,
+* the current step of a process banner (a row of chevrons where only the
+  current step is in dark text) as a "slide_step" heading,
 * then its body: bullets keep their nesting levels; tables become tables;
   flowcharts become a picture plus their text as bullets.
 
@@ -88,6 +90,7 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
     prev_title: str | None = None
     prev_title_page = 0
     prev_subtitle: str | None = None
+    prev_step: str | None = None
 
     for idx, items in enumerate(pages):
         items = [
@@ -162,6 +165,18 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
             if open_:
                 finish_block(open_.block)
             open_ = None
+
+        # The current step of a process banner ("4. Consents / Service on
+        # Relevant Persons"): a small heading, once per run of slides on it.
+        step = [it for it in body if isinstance(it, Line) and it.banner]
+        if step:
+            body = [it for it in body if not (isinstance(it, Line) and it.banner)]
+            step_text = _norm(" ".join(ln.text for ln in step))
+            if step_text != prev_step:
+                slide_blocks.append(_heading(step, "slide_step", slide_no, "current step in a process banner"))
+            prev_step = step_text
+        elif not merged_note:
+            prev_step = None
 
         for it in body:
             if not isinstance(it, Line):

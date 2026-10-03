@@ -421,7 +421,7 @@ def flow_blocks(lines: list[Line], page_no: int) -> list[Block]:
         # paragraph (often centred in cells) or the line is indented past the
         # bullet glyph (wrapped bullet text; its indent can differ from the
         # first line's).
-        if open_ and _close_below(open_, ln) and not is_new_item(open_, ln) and (
+        if open_ and (_close_below(open_, ln) or hanging_wrap(open_, ln)) and not is_new_item(open_, ln) and (
             open_.block.kind == "paragraph" or ln.x0 > open_.lines[0].x0 + 2
         ):
             join_line(open_.block, ln)

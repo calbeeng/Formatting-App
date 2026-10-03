@@ -168,3 +168,20 @@ def test_mca_deck_round_two():
     assert not find(doc, "These excluded decisions").text.endswith("32")
     cell = table_with("It does not matter").cell(0, 1).blocks[0]
     assert not any(r.superscript for r in cell.runs)
+
+
+def test_mca_deck_round_three():
+    doc = parse_sample(MCA)
+    # Process banner: only the current step, as a heading, once per run of slides
+    steps = [b.text for b in doc.blocks if b.style_key == "slide_step"]
+    assert "4. Consents / Service on Relevant Persons" in steps
+    assert steps.count("1. Originating Application") == 1
+    assert not any("Supporting Affidavit" in b.text and "Originating" in b.text for b in doc.blocks)
+    # Slides with typed numbers keep their other lines plain
+    assert find(doc, "Who are “relevant persons”?").kind == "paragraph"
+    # Deputies introduction: the "Section 21" row has no rule under it
+    t = next(b for b in doc.blocks if b.kind == "table" and "Section 21" in b.text).table
+    assert t.cell(1, 0).text == "Section 21" and "Part 5 Rule 8(4)" in t.cell(1, 1).text
+    # Public Guardian functions: two columns of a numbered list
+    pg = next(b for b in doc.blocks if b.kind == "table" and "Establishing & maintaining" in b.text).table
+    assert pg.n_cols == 2 and "place to furnish such information" in pg.cell(0, 1).text

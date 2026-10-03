@@ -24,6 +24,7 @@ HEADING_KINDS = [
     ("section_title", "Section divider slides, e.g. “Pre-Acquisition Steps”"),
     ("slide_title", "Slide titles"),
     ("slide_subtitle", "Bold line under a slide title"),
+    ("slide_step", "Current step in a process banner"),
     ("word_h1", "Word “Heading 1”"),
     ("word_h2", "Word “Heading 2”"),
     ("word_h3", "Word “Heading 3”"),

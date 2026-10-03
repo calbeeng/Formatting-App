@@ -20,6 +20,7 @@ DEFAULT_HEADING_MAP = {
     "slide_title": "HEADING_2",  # title of each slide in a slide deck
     "section_title": "HEADING_1",   # section divider slide ("Pre-Acquisition Steps")
     "slide_subtitle": "HEADING_3",  # bold line just under a slide title
+    "slide_step": "HEADING_4",      # current step in a process banner
     # Word documents: Word's own heading levels
     "word_h1": "HEADING_1",
     "word_h2": "HEADING_2",
