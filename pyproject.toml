@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "notes2gdoc"
-version = "0.5.0"
+version = "0.6.0"
 description = "Extract structured text from study files (PDF, later Word/PowerPoint) and append it to a Google Doc with clean formatting."
 requires-python = ">=3.11"
 dependencies = [
