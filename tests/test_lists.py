@@ -185,3 +185,21 @@ def test_mca_deck_round_three():
     # Public Guardian functions: two columns of a numbered list
     pg = next(b for b in doc.blocks if b.kind == "table" and "Establishing & maintaining" in b.text).table
     assert pg.n_cols == 2 and "place to furnish such information" in pg.cell(0, 1).text
+
+
+def test_mca_deck_round_four():
+    doc = parse_sample(MCA)
+    # Slides 26 and 27 (same columns, no title row) are one table
+    t = next(b for b in doc.blocks if b.kind == "table" and "Section 12(3)" in b.text).table
+    assert t.n_rows == 2 and t.cell(1, 0).text.startswith("Section 12(4)")
+    # Typed numbers that can't be a real list still hang like one
+    office = find(doc, "1. Office of the Public Guardian")
+    assert office.hanging and office.level == 0
+    vol = next(b for b in doc.blocks if b.kind == "table" and "Voluntary" in b.text).table
+    levels = [(b.text[:2], b.level) for b in vol.cell(1, 0).blocks if b.hanging]
+    assert levels == [("1.", 0), ("2.", 0), ("a.", 1), ("b.", 1), ("3.", 0)]
+    # ...with bullets between items nested under them; row labels left alone
+    jointly = t.cell(1, 1).blocks
+    assert [b.level for b in jointly if b.kind == "bullet"] == [1, 1, 1, 1]
+    bkr = next(b for b in doc.blocks if b.kind == "table" and "Functional Component" in b.text).table
+    assert not bkr.cell(0, 0).blocks[0].hanging

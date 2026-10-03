@@ -188,6 +188,7 @@ class Slot:
     prev_start: int          # start index of the paragraph just before
     prev_newline: int        # index of that paragraph's final newline
     prev_empty: bool         # that paragraph has no text
+    prev_plain: bool = False  # ...and has no bullet or indent (a table can follow it directly)
 
 
 def slot_before(doc: dict, anchor: int | None) -> Slot:
@@ -199,13 +200,18 @@ def slot_before(doc: dict, anchor: int | None) -> Slot:
     is_empty_doc = len(content) == 1 and "paragraph" in content[0] and not paragraph_text(content[0]).strip("\n")
     if "paragraph" not in prev:
         return Slot(anchor, False, True, prev["startIndex"], prev["endIndex"] - 1, False)
+    style = prev["paragraph"].get("paragraphStyle", {})
+    plain = ("bullet" not in prev["paragraph"]
+             and (style.get("indentStart") or {}).get("magnitude", 0) == 0
+             and (style.get("indentFirstLine") or {}).get("magnitude", 0) == 0)
     return Slot(anchor, is_empty_doc, False, prev["startIndex"], prev["endIndex"] - 1,
-                not paragraph_text(prev).strip("\n"))
+                not paragraph_text(prev).strip("\n"), plain)
 
 
 def find_table_at(doc: dict, index: int) -> dict | None:
-    """The first table that starts at or after `index`."""
+    """The table we just inserted at `index`: Docs puts a newline first, so
+    it starts at index + 1 (allowing a little slack)."""
     for c in body_content(doc):
-        if "table" in c and c["startIndex"] >= index:
+        if "table" in c and index <= c["startIndex"] <= index + 2:
             return c
     return None

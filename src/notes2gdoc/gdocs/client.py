@@ -233,13 +233,17 @@ class AppendJob:
         t = block.table
         # A table takes on the indent of the paragraph it's inserted into, so
         # inserting it right after a bullet indents the whole table (and the
-        # line after it). So: always start from our own plain, empty paragraph.
-        # This leaves one blank line above the table.
-        # The table's line also gets an explicit zero indent: Google positions
-        # a table by its line's indent, and a doc's Normal text style may have one.
-        prep, index = self._ensure_fill_paragraph(slot)
-        prep += writer.plain_paragraph_requests(index, index + 1)
-        prep.append(writer.zero_indent_request(index, index + 1))
+        # line after it). After a plain line (a heading, ordinary text) the
+        # table goes straight under it, with no blank line in between.
+        # Otherwise it starts from our own plain, empty paragraph, which
+        # leaves one blank line above it; that line gets an explicit zero
+        # indent, as Google positions a table by its line's indent.
+        if slot.prev_plain and not slot.prev_empty and not slot.prev_is_table and not slot.doc_is_empty:
+            prep, index = [], slot.prev_newline
+        else:
+            prep, index = self._ensure_fill_paragraph(slot)
+            prep += writer.plain_paragraph_requests(index, index + 1)
+            prep.append(writer.zero_indent_request(index, index + 1))
         self._batch(prep + [{"insertTable": {"rows": t.n_rows, "columns": t.n_cols,
                                              "location": {"index": index}}}])
         doc = self._get()
@@ -256,34 +260,45 @@ class AppendJob:
             doc = self._get()
             table_el = target.find_table_at(doc, index)
 
-        rows = table_el["table"]["tableRows"]
-        # Full page width, in the source's column proportions
-        reqs: list[dict] = writer.table_width_requests(
-            table_el["startIndex"], t.col_widths, t.n_cols, self._page_width)
-        reqs += writer.cell_background_requests(table_el["startIndex"], t.cells, self.settings.strip_colour)
-        # The empty line Docs leaves after a table copies the style of the
-        # paragraph the table was inserted into (maybe a bullet); make it plain.
-        after = target.element_starting_at(doc, table_el["endIndex"])
-        if after and "paragraph" in after and not target.paragraph_text(after).strip():
-            reqs += writer.plain_paragraph_requests(after["startIndex"], after["endIndex"])
-            reqs.append(writer.zero_indent_request(after["startIndex"], after["endIndex"]))
-        # ...and the blank line just above the table, which the table hangs off
-        before = target.element_ending_at(doc, table_el["startIndex"])
-        if before and "paragraph" in before and not target.paragraph_text(before).strip():
-            reqs.append(writer.zero_indent_request(before["startIndex"], before["endIndex"]))
-        for cell in sorted(t.cells, key=lambda c: (c.row, c.col), reverse=True):
-            blocks = [b for b in cell.blocks if b.text.strip() or b.spacer]
-            while blocks and blocks[-1].spacer:
-                blocks.pop()
-            if not blocks:
-                continue
+        # If Google says the table isn't where we think it is, read the doc
+        # again and retry once (the fill is one all-or-nothing batch, so a
+        # failed attempt changed nothing).
+        for attempt in range(2):
+            rows = table_el["table"]["tableRows"]
+            # Full page width, in the source's column proportions
+            reqs: list[dict] = writer.table_width_requests(
+                table_el["startIndex"], t.col_widths, t.n_cols, self._page_width)
+            reqs += writer.cell_background_requests(table_el["startIndex"], t.cells, self.settings.strip_colour)
+            # The empty line Docs leaves after a table copies the style of the
+            # paragraph the table was inserted into (maybe a bullet); make it plain.
+            after = target.element_starting_at(doc, table_el["endIndex"])
+            if after and "paragraph" in after and not target.paragraph_text(after).strip():
+                reqs += writer.plain_paragraph_requests(after["startIndex"], after["endIndex"])
+                reqs.append(writer.zero_indent_request(after["startIndex"], after["endIndex"]))
+            # ...and the blank line just above the table, which the table hangs off
+            before = target.element_ending_at(doc, table_el["startIndex"])
+            if before and "paragraph" in before and not target.paragraph_text(before).strip():
+                reqs.append(writer.zero_indent_request(before["startIndex"], before["endIndex"]))
+            for cell in sorted(t.cells, key=lambda c: (c.row, c.col), reverse=True):
+                blocks = [b for b in cell.blocks if b.text.strip() or b.spacer]
+                while blocks and blocks[-1].spacer:
+                    blocks.pop()
+                if not blocks:
+                    continue
+                try:
+                    start = rows[cell.row]["tableCells"][cell.col]["content"][0]["startIndex"]
+                except (IndexError, KeyError):
+                    continue
+                cell_reqs, _ = writer.text_requests(blocks, start, self.settings, preset, flush_left=True)
+                reqs.extend(cell_reqs)
             try:
-                start = rows[cell.row]["tableCells"][cell.col]["content"][0]["startIndex"]
-            except (IndexError, KeyError):
-                continue
-            cell_reqs, _ = writer.text_requests(blocks, start, self.settings, preset, flush_left=True)
-            reqs.extend(cell_reqs)
-        self._batch(reqs)
+                self._batch(reqs)
+                return
+            except Exception as exc:
+                if attempt or "table start location" not in str(exc).lower():
+                    raise
+                doc = self._get()
+                table_el = target.find_table_at(doc, index) or table_el
 
 
 def save_dry_run(path: str, result: AppendResult, preview: list) -> None:

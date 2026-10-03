@@ -133,6 +133,14 @@ def text_requests(
                 runs.append((len(text), Run(t, r.bold, r.italic, r.underline, r.superscript, r.subscript,
                                             r.color, r.highlight)))
                 text += t
+        if b.hanging:
+            # The gap after the typed number becomes a tab, so the text lines
+            # up with the hanging indent like a real list's text does
+            from ..lists import marker_of
+            m = marker_of(text)
+            cut = len(m[1]) if m else -1
+            if 0 <= cut < len(text) and text[cut] == " ":
+                text = text[:cut] + "\t" + text[cut + 1:]
         paras.append((b, text, runs))
     if not paras:
         return [], 0
@@ -175,14 +183,26 @@ def text_requests(
     # theirs just below.
     if flush_left or settings.flush_left:
         for (b, text, _), start in zip(paras, starts):
-            if b.kind != "bullet" and not (b.kind == "paragraph" and b.level > 0):
+            if b.kind != "bullet" and not (b.kind == "paragraph" and (b.level > 0 or b.hanging)):
                 reqs.append(zero_indent_request(start, start + len(text) + 1, tab_id))
 
     # Paragraphs inside a list (e.g. a quote under a bullet) are indented to
     # line up with the bullet text: one list level = LIST_INDENT_PT, the same
     # step Google Docs uses for its bullet levels.
+    # Typed list items kept as text hang like a list item: number at the
+    # list's number position, text (and wrapped lines) at its text position
     for (b, text, _), start in zip(paras, starts):
-        if b.kind == "paragraph" and b.level > 0:
+        if b.kind == "paragraph" and b.hanging:
+            reqs.append({"updateParagraphStyle": {
+                "range": _range(start, start + len(text) + 1, tab_id),
+                "paragraphStyle": {
+                    "indentStart": {"magnitude": LIST_INDENT_PT * (b.level + 1), "unit": "PT"},
+                    "indentFirstLine": {"magnitude": LIST_INDENT_PT * b.level + LIST_INDENT_PT / 2, "unit": "PT"},
+                },
+                "fields": "indentStart,indentFirstLine",
+            }})
+    for (b, text, _), start in zip(paras, starts):
+        if b.kind == "paragraph" and b.level > 0 and not b.hanging:
             indent = {"magnitude": LIST_INDENT_PT * b.level, "unit": "PT"}
             reqs.append({"updateParagraphStyle": {
                 "range": _range(start, start + len(text) + 1, tab_id),

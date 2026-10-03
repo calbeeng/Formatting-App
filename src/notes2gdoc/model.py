@@ -123,6 +123,10 @@ class Block:
     # (e.g. a note under item 1, before item 2). It's indented under its item
     # and the list's numbering carries on after it.
     in_list: bool = False
+    # A typed list item that can't be a real Google Docs list (e.g. "2." after
+    # a table): its number stays as text, but it's laid out like a list item,
+    # hanging at list level `level` (0 = top).
+    hanging: bool = False
 
     @property
     def text(self) -> str:

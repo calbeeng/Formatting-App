@@ -168,7 +168,46 @@ def _convert_list(items: list[Block], flat: bool = False) -> bool:
 
 
 def convert_numbered_lists(doc: Document) -> None:
-    _convert_blocks(doc.blocks, False)
+    slides = doc.layout == "slides"
+    # Google Docs nests list items in table cells unreliably, so on slides
+    # lists in cells keep their typed numbers (laid out like a list below)
+    _convert_blocks(doc.blocks, False, cells=not slides)
+    if slides:
+        _hang_literal_items(doc.blocks)
+
+
+def _hang_literal_items(blocks: list[Block], in_cell: bool = False) -> None:
+    """Typed list items left as text (a lone "1." before a table, "2."-"4."
+    after it, lists in table cells) are still laid out like a list: number
+    hanging, wrapped lines indented, letters one level in from numbers. The
+    level is the order each kind of number first appears in the run
+    (1. -> a. -> i.). Bullets between items nest under the item above.
+    A table cell with a single numbered line ("1. Functional Component", a
+    row label) isn't a list and is left alone."""
+    if in_cell and sum(1 for b in blocks if _is_item(b)) < 2:
+        return
+    order: list[str] = []
+    last: dict[str, int] = {}
+    item_level: int | None = None   # level of the last item, while in a run
+    for b in blocks:
+        if _is_item(b):
+            typed = _classify(marker_of(b.text)[0], last)
+            if typed is None:
+                continue
+            typ, val = typed
+            last[typ] = val
+            if typ not in order:
+                order.append(typ)
+            b.hanging = True
+            b.level = item_level = order.index(typ)
+            continue
+        if item_level is not None and b.kind == "bullet" and not b.numbered:
+            b.level += item_level + 1
+            continue
+        order, last, item_level = [], {}, None
+        if b.kind == "table":
+            for cell in b.table.cells:
+                _hang_literal_items(cell.blocks, in_cell=True)
 
 
 def _is_item(b: Block | None) -> bool:
@@ -181,7 +220,7 @@ def _is_inside(b: Block) -> bool:
     return (b.kind == "bullet" and not b.numbered) or (b.kind == "paragraph" and b.level > 0 and not b.spacer)
 
 
-def _convert_blocks(blocks: list[Block], in_cell: bool) -> None:
+def _convert_blocks(blocks: list[Block], in_cell: bool, cells: bool = True) -> None:
     run: list[Block] = []
     for b in blocks + [None]:
         if _is_item(b) or (run and b is not None and _is_inside(b)):
@@ -192,7 +231,8 @@ def _convert_blocks(blocks: list[Block], in_cell: bool) -> None:
             run = []
         if b is not None and b.kind == "table":
             for cell in b.table.cells:
-                _convert_blocks(cell.blocks, True)
+                if cells:
+                    _convert_blocks(cell.blocks, True)
 
 
 def _convert_with_inside(seq: list[Block], in_cell: bool) -> None:

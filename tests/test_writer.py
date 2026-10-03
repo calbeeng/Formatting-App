@@ -446,3 +446,44 @@ def test_paragraphs_flush_left_by_default():
     doc2, _ = append(blocks, settings=Settings(flush_left=False))
     styles2 = {text: st for st, text in _para_styles(doc2)}
     assert "indentStart" not in styles2["Bonds"]
+
+
+def _body(doc):
+    return doc.to_json()["body"]["content"]
+
+
+def test_table_straight_under_a_heading():
+    """No blank line between a heading (or plain text) and the table under it;
+    after a bullet the blank line stays, so the table isn't indented."""
+    def table():
+        return Table(1, 2, [TableCell(0, 0, [Block("paragraph", [Run("A")])]),
+                            TableCell(0, 1, [Block("paragraph", [Run("B")])])])
+    blocks = [Block("heading", [Run("Re BKR")], style_key="slide_title"), Block("table", table=table()),
+              Block("bullet", [Run("A point")], level=0), Block("table", table=table())]
+    doc, _ = append(blocks)
+    content = _body(doc)
+    first = next(i for i, c in enumerate(content) if "table" in c)
+    above = content[first - 1]["paragraph"]
+    assert "".join(e["textRun"]["content"] for e in above["elements"]).strip() == "Re BKR"
+    assert above["paragraphStyle"]["namedStyleType"] == "HEADING_2"
+    # the line under the table is plain, not a second heading
+    below = content[first + 1]["paragraph"]
+    assert below["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
+    second = [i for i, c in enumerate(content) if "table" in c][1]
+    gap = content[second - 1]["paragraph"]
+    assert not "".join(e["textRun"]["content"] for e in gap["elements"]).strip()
+    assert "inheritedIndent" not in content[second]["table"]
+
+
+def test_typed_numbers_hang_like_a_list():
+    item = Block("paragraph", [Run("2. Mandatory waiting period of 3 weeks")], hanging=True)
+    sub = Block("paragraph", [Run("a. Through OPGO")], hanging=True, level=1)
+    doc, _ = append([item, sub])
+    ps = [c["paragraph"] for c in _body(doc) if "paragraph" in c]
+    p2 = next(p for p in ps if "Mandatory" in "".join(e["textRun"]["content"] for e in p["elements"]))
+    pa = next(p for p in ps if "OPGO" in "".join(e["textRun"]["content"] for e in p["elements"]))
+    assert "".join(e["textRun"]["content"] for e in p2["elements"]).startswith("2.\tMandatory")
+    st = p2["paragraphStyle"]
+    assert (st["indentFirstLine"]["magnitude"], st["indentStart"]["magnitude"]) == (18, 36)
+    st = pa["paragraphStyle"]
+    assert (st["indentFirstLine"]["magnitude"], st["indentStart"]["magnitude"]) == (54, 72)
