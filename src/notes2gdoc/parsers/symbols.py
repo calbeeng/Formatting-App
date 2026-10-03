@@ -34,16 +34,20 @@ def is_symbol_font(font: str | None) -> bool:
     return name == "symbol" or name.startswith(("wingdings", "webdings"))
 
 
-def fix_symbols(text: str, font: str | None) -> str:
+def fix_symbols(text: str, font: str | None, symbol_font: str | None = None) -> str:
     """Translate characters typed in the Symbol/Wingdings fonts.
 
     Two cases: private-use characters (U+F000-U+F0FF), which can appear in any
     run; and ordinary letters in a run whose font IS Symbol/Wingdings (e.g. a
     "b" in the Symbol font displays as β). Characters with no translation are
     kept (spaces, digits) or, for private-use ones, dropped.
+
+    `font` is the run's own font. `symbol_font` (PowerPoint's "sym" font) is
+    only used for private-use characters, never for ordinary letters: a run
+    in Calibri with sym=Wingdings shows "w" as w, not as ◆.
     """
-    name = (font or "").lower()
     whole_run = is_symbol_font(font)
+    name = ((font if whole_run or not symbol_font else symbol_font) or "").lower()
     if not whole_run and not any(0xF000 <= ord(c) <= 0xF0FF for c in text):
         return text
     tables = [_WINGDINGS] if "wingding" in name else [_SYMBOL] if "symbol" in name else [_SYMBOL, _WINGDINGS]

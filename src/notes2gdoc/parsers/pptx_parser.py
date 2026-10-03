@@ -484,10 +484,12 @@ class PptxParser:
     def _bullet_kind(self, p, it: _Item):
         """True for a bullet, ("scheme", start) for automatic numbering, or
         False for plain text."""
+        lvl = f"{A}lvl{p.level + 1}pPr"
         sources = [p._p.pPr]
         lst = it.shape.text_frame._txBody.find(A + "lstStyle")
         if lst is not None:
-            sources.append(lst.find(f"{A}lvl{p.level + 1}pPr"))
+            sources.append(lst.find(lvl))
+        sources += self._inherited_styles(it, lvl)
         for src in sources:
             if src is None:
                 continue
@@ -500,6 +502,31 @@ class PptxParser:
                 return True
         # Content placeholders show bullets unless told otherwise
         return it.ph in (PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT) if it.ph is not None else False
+
+    def _inherited_styles(self, it: _Item, lvl: str) -> list:
+        """A placeholder's paragraph style for this level from the slide
+        layout, then from the slide master's body text style. (Some templates
+        switch bullets off for the top level there: "Exhibit 4.2" is plain
+        text, only the level below has bullets.)"""
+        sh = it.shape
+        if it.ph is None or not getattr(sh, "is_placeholder", False):
+            return []
+        out = []
+        try:
+            layout = sh.part.slide.slide_layout
+            idx = sh.placeholder_format.idx
+            lp = next((x for x in layout.placeholders if x.placeholder_format.idx == idx), None)
+            if lp is not None:
+                lst = lp._element.find(".//" + A + "lstStyle")
+                if lst is not None:
+                    out.append(lst.find(lvl))
+            if it.ph in (PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT):
+                body = layout.slide_master._element.find(".//" + qn("p:bodyStyle"))
+                if body is not None:
+                    out.append(body.find(lvl))
+        except Exception:
+            return out
+        return out
 
     def _runs(self, p) -> list[Run]:
         runs = []
@@ -518,15 +545,14 @@ class PptxParser:
             if colour and max(int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16)) < 0x30:
                 colour = None
             highlight = _colour_of(rPr.find(A + "highlight"), self.theme) if rPr is not None else None
-            font = None  # which font a Symbol/Wingdings character was typed in
+            # The run's font, and its separate font for symbol characters
+            font = sym = None
             if rPr is not None:
-                for tag in ("sym", "latin"):
-                    el = rPr.find(A + tag)
-                    if el is not None and el.get("typeface"):
-                        font = el.get("typeface")
-                        break
+                latin, sym_el = rPr.find(A + "latin"), rPr.find(A + "sym")
+                font = latin.get("typeface") if latin is not None else None
+                sym = sym_el.get("typeface") if sym_el is not None else None
             runs.append(Run(
-                fix_symbols(r.text.replace("\x0b", " "), font),
+                fix_symbols(r.text.replace("\x0b", " "), font, sym),
                 bold=bool(f.bold), italic=bool(f.italic),
                 underline=bool(f.underline) and f.underline is not False,
                 superscript=baseline > 0, subscript=baseline < 0,

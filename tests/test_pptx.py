@@ -167,3 +167,22 @@ def test_mgmt_sample():
     assert sum(1 for b in doc.blocks if b.kind == "image") >= 10
     assert not any("text alternative" in b.text.lower() for b in doc.blocks)
     assert not any("all rights reserved" in b.text.lower() for b in doc.blocks if b.selected)
+
+
+def test_symbol_font_is_only_for_symbols():
+    from notes2gdoc.parsers.symbols import fix_symbols
+
+    # PowerPoint's separate "sym" font (Wingdings) doesn't change ordinary letters
+    assert fix_symbols("Stocks with above", "Calibri", "Wingdings") == "Stocks with above"
+    # ...but a run whose own font is Symbol does ("b" shows as beta)
+    assert fix_symbols("b", "Symbol") == "β"
+
+
+def test_samples_letters_and_template_bullets():
+    multi = parse_sample(MULTIFACTOR)
+    assert find(multi, "Stocks with above characteristics").kind == "bullet"
+    assert not any("■" in b.text or "❖" in b.text for b in multi.blocks)
+    # MGMT102's template has no bullet on top-level lines, only on the level below
+    mgmt = parse_sample(MGMT)
+    assert find(mgmt, "Exhibit 4.2").kind == "paragraph"
+    assert find(mgmt, "Adjust along with the external environment").kind == "bullet"
