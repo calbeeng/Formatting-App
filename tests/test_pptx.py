@@ -186,3 +186,12 @@ def test_samples_letters_and_template_bullets():
     mgmt = parse_sample(MGMT)
     assert find(mgmt, "Exhibit 4.2").kind == "paragraph"
     assert find(mgmt, "Adjust along with the external environment").kind == "bullet"
+
+
+def test_bullets_under_plain_line_are_top_level():
+    mgmt = parse_sample(MGMT)
+    # "• A firm is a unique bundle…" is PowerPoint level 2 under the plain
+    # line "Resource Heterogeneity." -> a top-level (filled ●) bullet
+    assert find(mgmt, "A firm is a unique bundle").level == 0
+    # "Resource Immobility." sets a zero left margin: not indented
+    assert find(mgmt, "Resource Immobility").level == 0

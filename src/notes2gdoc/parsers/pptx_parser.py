@@ -452,7 +452,13 @@ class PptxParser:
             # WASN'T indented this way (its "anchor"), so a run of them lines up.
             lead = len(p.text) - len(p.text.lstrip(" 	"))
             if not kind:
-                marl = int(p._p.pPr.get("marL", "0")) if p._p.pPr is not None else 0
+                pPr = p._p.pPr
+                marl = int(pPr.get("marL", "0")) if pPr is not None else 0
+                # A plain line's indent is its left margin when it sets one:
+                # "Resource Immobility." is level 2 with marL=0, so it sits
+                # at the left edge on the slide.
+                if pPr is not None and pPr.get("marL") is not None:
+                    level = round(marl / 457200)
                 if anchor is not None and (lead >= 2 and anchor.kind == "bullet" or lead >= 4):
                     level = max(level, anchor.level + 1)
                     spaced = True
@@ -479,7 +485,7 @@ class PptxParser:
                 out.append(Block("paragraph", runs, level=level, page=slide_no, note=note))
             if not spaced:
                 anchor = out[-1]
-        return out
+        return _bullets_from_top(out)
 
     def _bullet_kind(self, p, it: _Item):
         """True for a bullet, ("scheme", start) for automatic numbering, or
@@ -785,6 +791,31 @@ class PptxParser:
 # --------------------------------------------------------------------------- #
 # Small helpers
 # --------------------------------------------------------------------------- #
+
+def _bullets_from_top(blocks: list[Block]) -> list[Block]:
+    """Bullets directly under a plain line start at that line's level.
+
+    Templates often put the main points at PowerPoint's second level under an
+    unbulleted line ("Resource Heterogeneity." / "• A firm is a unique
+    bundle…"). Kept at the second level, Google Docs would draw them with its
+    second-level hollow ○ instead of the slide's •."""
+    i = 0
+    while i < len(blocks):
+        if blocks[i].kind != "bullet":
+            i += 1
+            continue
+        j = i
+        while j < len(blocks) and blocks[j].kind == "bullet":
+            j += 1
+        # ...but never left of the line they're under (an indented
+        # "A B/M-factor portfolio is constructed by:" keeps its points indented)
+        floor = blocks[i - 1].level if i else 0
+        shift = max(0, min(b.level for b in blocks[i:j]) - floor)
+        for b in blocks[i:j]:
+            b.level -= shift
+        i = j
+    return blocks
+
 
 def slide_no_of(slide, prs) -> int:
     for i, s in enumerate(prs.slides, 1):
