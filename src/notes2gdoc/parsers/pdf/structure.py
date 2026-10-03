@@ -174,7 +174,8 @@ def is_decorative(line: Line) -> bool:
 
 
 # A typed list marker at the start of a line: "a.", "b)", "(c)", "1.", "2)".
-_LIST_MARKER = re.compile(r"^\s*(\([a-zA-Z0-9]{1,4}\)|[a-zA-Z0-9]{1,3}[.)])\s")
+# (letters: one letter, or a roman numeral like "iv"; not "MR." or "Dr.")
+_LIST_MARKER = re.compile(r"^\s*(\((?:\d{1,3}|[a-zA-Z]|[ivxlcIVXLC]{1,4})\)|(?:\d{1,3}|[a-zA-Z]|[ivxlcIVXLC]{1,4})[.)])\s")
 
 
 def starts_list_item(line: Line) -> bool:
@@ -206,13 +207,16 @@ def is_new_item(open_: OpenBlock, line: Line) -> bool:
     the middle of an ordinary paragraph: in "…requirements of subsections" /
     "(1) to (9)) the person…" the "(1)" just happens to start the next line.
     That's recognised when the paragraph isn't itself a list item, the line
-    above doesn't end a sentence or clause, and the line lines up with it in
-    the same font size."""
+    above doesn't end a sentence or clause, the line lines up with it in the
+    same font size, and the text after the "number" doesn't start with a
+    capital ("1. When donor…" under "Section 15(2), MCA" is a real item)."""
     if not starts_list_item(line):
         return False
     prev = open_.last.text.rstrip()
+    after = _LIST_MARKER.sub("", line.text, count=1).lstrip()
     mid_sentence = (
-        not starts_list_item(open_.lines[0])
+        not after[:1].isupper()
+        and not starts_list_item(open_.lines[0])
         and bool(prev) and prev[-1] not in _SENTENCE_END
         and abs(line.x0 - open_.last.x0) <= INDENT_TOLERANCE
         and abs(line.size - open_.last.size) <= 1

@@ -138,3 +138,33 @@ def test_mca_deck():
     assert (s5.cell(0, 0).text, s5.cell(0, 1).text) == ("Section 3(2)", "Assume person has capacity")
     # A hyphen at a line end is kept when it's part of the word
     assert "decision-specific" in find(doc, "The test for the lack of mental capacity").text
+
+
+def test_mca_deck_round_two():
+    doc = parse_sample(MCA)
+
+    def table_with(text):
+        return next(b for b in doc.blocks if b.kind == "table" and text in b.text).table
+
+    # Tables between just two rules, a label column on the left
+    t = table_with("Section 13(1)")
+    assert t.cell(0, 0).text == "Section 13(1)" and t.cell(0, 1).text.startswith("A donee must not")
+    assert table_with("Section 20(1) & 20(2)").cell(0, 0).text == "Section 20(1) & 20(2)"
+    assert table_with("Section 6(1)").n_cols == 2                      # slide 11
+    # Two columns of bullets side by side (slides 33, 35, 68)
+    duties = table_with("Follow the statutory principles")
+    assert duties.n_cols == 2 and "Keep accounts" in duties.cell(0, 1).text
+    assert "NOTE" in table_with("Family member of donor").cell(0, 1).text
+    powers = table_with("where P is to live")
+    assert (powers.cell(0, 0).text, powers.cell(0, 1).text) == ("Personal Welfare", "Property & Affairs")
+    assert "conduct of legal proceedings" in powers.cell(1, 1).text
+    # A centred heading over a block of text: one-column table
+    vol = table_with("Voluntary")
+    assert vol.n_cols == 1 and vol.cell(1, 0).blocks[0].text == "Section 15(2), MCA"
+    # Pictures on slides 32 and 50, but not the logo on every slide
+    pics = [b.page for b in doc.blocks if b.kind == "image"]
+    assert 32 in pics and pics.count(50) == 2 and 2 not in pics
+    # No slide numbers glued onto text, no whole lines marked superscript
+    assert not find(doc, "These excluded decisions").text.endswith("32")
+    cell = table_with("It does not matter").cell(0, 1).blocks[0]
+    assert not any(r.superscript for r in cell.runs)

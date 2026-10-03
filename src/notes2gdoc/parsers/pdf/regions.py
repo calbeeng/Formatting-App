@@ -124,7 +124,7 @@ RULED_MIN_GAP = 3
 COLUMN_SUPPORT = 3
 
 
-def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[fitz.Rect, list[float]]],
+def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[fitz.Rect, list[float], list[tuple[float, float]]]],
                       exclude: list[fitz.Rect]) -> list[TableRegion]:
     """Tables drawn with horizontal rules only, like
 
@@ -138,7 +138,7 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
     `texts` holds each text line's box and the x positions where its style
     changes at the start of a word (see extract._style_breaks).
 
-    * Rows are the bands between rules (at least 3 rules, 2 bands with text).
+    * Rows are the bands between rules (at least 2 rules).
     * Column boundaries come from empty vertical gaps between the text in a
       row. A gap counts only if no line in any row runs across it (rows of a
       single line, maybe a header, don't count), unless that
@@ -159,7 +159,7 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
     for r in rules:
         if not ys or r.y0 - ys[-1] > 3:
             ys.append((r.y0 + r.y1) / 2)
-    if len(ys) < 3:
+    if len(ys) < 2:
         return []
     x0 = min(r.x0 for r in rules)
     x1 = max(r.x1 for r in rules)
@@ -168,31 +168,67 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
 
     bands = []
     for top, bottom in zip(ys, ys[1:]):
-        rows = [(r, w) for r, w in texts if top < (r.y0 + r.y1) / 2 < bottom and x0 <= r.x0 and r.x1 <= x1 + 2]
+        rows = [(r, w, ws) for r, w, ws in texts if top < (r.y0 + r.y1) / 2 < bottom and x0 <= r.x0 and r.x1 <= x1 + 2]
         if rows:
             bands.append((top, bottom, rows))
-    if len(bands) < 2:
+    if not bands:
         return []
 
+    region = _table_from_bands(bands, x0, x1)
+    if region is None:
+        # The last row may have no rule under it (Powers of Court: rules only
+        # around the "Personal Welfare | Property & Affairs" header): try
+        # again with the text below the last rule as a final row.
+        below = [t for t in texts if (t[0].y0 + t[0].y1) / 2 > ys[-1]
+                 and (t[0].y0 + t[0].y1) / 2 <= page.rect.height * 0.95 and x0 - 2 <= t[0].x0 and t[0].x1 <= x1 + 2]
+        if below:
+            bottom = max(t[0].y1 for t in below) + 2
+            region = _table_from_bands(bands + [(ys[-1], bottom, below)], x0, x1)
+    if region is None:
+        region = _one_column_table(bands, x0, x1)
+    return [region] if region else []
+
+
+def _one_column_table(bands, x0: float, x1: float) -> TableRegion | None:
+    """A centred heading between two rules with a block of text under it
+    ("Voluntary" / its provisions): a one-column table with a header row."""
+    if len(bands) < 2 or len(bands[0][2]) != 1:
+        return None
+    head = bands[0][2][0][0]
+    centre = (x0 + x1) / 2
+    if abs((head.x0 + head.x1) / 2 - centre) > 0.08 * (x1 - x0) or head.width > 0.6 * (x1 - x0):
+        return None
+    cells = [CellSpec(i, 0, fitz.Rect(x0, top, x1, bottom)) for i, (top, bottom, _) in enumerate(bands)]
+    return TableRegion(fitz.Rect(x0, bands[0][0], x1, bands[-1][1]), len(bands), 1, cells, [x1 - x0])
+
+
+def _table_from_bands(bands, x0: float, x1: float) -> TableRegion | None:
+    """Columns and cells for rows of text between rules (see find_ruled_tables)."""
     def crosses(item, mid, edge) -> bool:
-        r, words = item
-        return r.x0 < mid < r.x1 and not any(abs(w - edge) <= 4 for w in words)
+        r, breaks, _ = item
+        return r.x0 < mid < r.x1 and not any(abs(w - edge) <= 4 for w in breaks)
+
+    def splits_word(item, mid, edge) -> bool:
+        """Like crosses(), but only if a word runs across `mid`: a line the
+        PDF happens to store across both columns ("… donor / " + "NOTE:")
+        has a space there."""
+        return crosses(item, mid, edge) and any(a < mid < b for a, b in item[2])
 
     # Candidate gaps from every row with 2+ lines; keep those no row crosses
     ok: list[tuple[float, float]] = []
     for _, _, rows in bands:
-        spans = sorted((r.x0, r.x1) for r, _ in rows)
+        spans = sorted((r.x0, r.x1) for r, *_ in rows)
         reach = spans[0][1]
         for a, b in spans[1:]:
             if a - reach >= RULED_MIN_GAP:
                 gap = (reach, a)
                 mid = (gap[0] + gap[1]) / 2
                 # (one-line rows may be headers running across: no veto)
-                if all(not crosses(it, mid, gap[1]) for _, _, rs in bands if len(rs) > 1 for it in rs):
+                if all(not splits_word(it, mid, gap[1]) for _, _, rs in bands if len(rs) > 1 for it in rs):
                     ok.append(gap)
             reach = max(reach, b)
     if not ok:
-        return []
+        return None
     # Overlapping gaps are the same column boundary: keep their common part
     # and count the rows that have it
     ok.sort()
@@ -208,11 +244,11 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
     in_table = [it for _, _, rs in bands for it in rs]
     merged = [
         (a, b) for a, b, n in merged
-        if n + sum(1 for r, brk in in_table
+        if n + sum(1 for r, brk, _ in in_table
                    if abs(r.x0 - b) <= 4 or any(abs(x - b) <= 4 for x in brk)) >= COLUMN_SUPPORT
     ]
     if not merged:
-        return []
+        return None
     edges = [b for _, b in merged]                 # where each column's text starts
     mids = [(a + b) / 2 for a, b in merged]
     bounds = [x0, *mids, x1]
@@ -230,7 +266,7 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
             cells.append(CellSpec(row, 0, fitz.Rect(x0, top, x1, bottom), colspan=n_cols))
             continue
         used = set()
-        for r, _ in rows:
+        for r, *_ in rows:
             used.add(column(r))
             # a line cut at a boundary fills both sides
             used.update(i + 1 for i, m in enumerate(mids) if r.x0 < m < r.x1)
@@ -238,10 +274,10 @@ def find_ruled_tables(page: fitz.Page, drawings: list[dict], texts: list[tuple[f
         for c in range(n_cols):
             cells.append(CellSpec(row, c, fitz.Rect(bounds[c], top, bounds[c + 1], bottom)))
     if not multi_column:
-        return []
+        return None
     rect = fitz.Rect(x0, bands[0][0], x1, bands[-1][1])
     widths = [bounds[i + 1] - bounds[i] for i in range(n_cols)]
-    return [TableRegion(rect, len(bands), n_cols, cells, widths, splits=edges)]
+    return TableRegion(rect, len(bands), n_cols, cells, widths, splits=edges)
 
 
 def _dedupe(values: list[int], tol: int = 3) -> list[int]:
@@ -348,3 +384,56 @@ def find_diagrams(
     ) & page.rect
     png = page.get_pixmap(clip=clip, dpi=DIAGRAM_DPI).tobytes("png")
     return [DiagramRegion(clip, text_shapes, png)]
+
+
+# Pictures (photos, scanned charts) embedded in the PDF. Smaller than this
+# share of the page = an icon or bullet image; bigger = a page background.
+PICTURE_MIN_AREA = 0.02
+PICTURE_MAX_AREA = 0.7
+
+
+def repeated_images(pages: list[fitz.Page]) -> set[int]:
+    """Images on many pages (a logo, a background): page decoration."""
+    if len(pages) < 3:
+        return set()
+    counts: dict[int, int] = {}
+    for page in pages:
+        for xref in {im[0] for im in page.get_images(full=True)}:
+            counts[xref] = counts.get(xref, 0) + 1
+    return {x for x, n in counts.items() if n >= max(3, 0.3 * len(pages))}
+
+
+def find_pictures(page: fitz.Page, skip: set[int], exclude: list[fitz.Rect],
+                  text_rects: list[fitz.Rect]) -> list[DiagramRegion]:
+    """Each picture becomes a DiagramRegion (cropped from the page, so masks
+    and cropping look the way they do in the PDF). Left out:
+    * pictures with text on top of them: a background behind the slide's
+      text (a texture, a title banner), not content;
+    * short banners in the top quarter of the page: a logo;
+    * anything over 3x wider than tall: a banner or a title drawn as a
+      picture (which can't become a heading anyway)."""
+    area = page.rect.width * page.rect.height
+    out: list[DiagramRegion] = []
+    for im in page.get_images(full=True):
+        if im[0] in skip:
+            continue
+        try:
+            rects = page.get_image_rects(im[0])
+        except Exception:
+            continue
+        for r in rects:
+            r = fitz.Rect(r) & page.rect
+            if r.is_empty or not PICTURE_MIN_AREA * area <= r.width * r.height <= PICTURE_MAX_AREA * area:
+                continue
+            centre = fitz.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
+            if any(e.contains(centre) for e in exclude + [o.rect for o in out]):
+                continue
+            if any(r.contains(fitz.Point((t.x0 + t.x1) / 2, (t.y0 + t.y1) / 2)) for t in text_rects):
+                continue
+            if r.y1 < page.rect.height * 0.3 and r.height < page.rect.height * 0.25:
+                continue
+            if r.width > 3 * r.height:  # a banner, e.g. a section title drawn as a picture
+                continue
+            png = page.get_pixmap(clip=r, dpi=DIAGRAM_DPI).tobytes("png")
+            out.append(DiagramRegion(r, [], png))
+    return out

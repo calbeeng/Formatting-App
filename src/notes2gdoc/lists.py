@@ -47,7 +47,10 @@ def marker_of(text: str) -> tuple[str, str] | None:
     m = _MARKER.match(text)
     if not m:
         return None
-    return (m.group("p") or m.group("d")), m.group(0)
+    tok = m.group("p") or m.group("d")
+    if tok.isalpha() and _alpha_value(tok) is None and not is_roman(tok.lower()):
+        return None  # "MR. Smith", "Dr. Tan": not a list letter
+    return tok, m.group(0)
 
 
 def _alpha_value(tok: str) -> int | None:
@@ -98,19 +101,19 @@ def _strip_marker(runs: list[Run], marker_text: str) -> list[Run]:
     return [r for r in out if r.text]
 
 
-def _convert_run(items: list[Block]) -> None:
+def _convert_run(items: list[Block], flat: bool = False) -> None:
     """Split a run of marker paragraphs where the numbering starts again (a
     second "1." straight after a list ending "3."), then convert each part."""
     first_tok = marker_of(items[0].text)[0].lower()
     start = 0
     for i in range(1, len(items) + 1):
         if i == len(items) or marker_of(items[i].text)[0].lower() == first_tok:
-            if _convert_list(items[start:i]) and start:
+            if _convert_list(items[start:i], flat) and start:
                 items[start].list_start = True
             start = i
 
 
-def _convert_list(items: list[Block]) -> bool:
+def _convert_list(items: list[Block], flat: bool = False) -> bool:
     """Convert one list, if its numbering is consistent. A lone
     "(1) Purpose: …" paragraph isn't a list, so it needs 2+ items."""
     if len(items) < 2:
@@ -151,6 +154,10 @@ def _convert_list(items: list[Block]) -> bool:
     # right, so keep the typed letters instead.
     if min(levels.values()) > 0:
         return False
+    # In table cells Google Docs doesn't nest list items reliably, so only
+    # single-level lists are converted there (`flat`)
+    if flat and max(levels.values()) > 0:
+        return False
     for b, mtext, typ, _rank in parsed:
         b.kind = "bullet"
         b.numbered = preset
@@ -161,7 +168,7 @@ def _convert_list(items: list[Block]) -> bool:
 
 
 def convert_numbered_lists(doc: Document) -> None:
-    _convert_blocks(doc.blocks)
+    _convert_blocks(doc.blocks, False)
 
 
 def _is_item(b: Block | None) -> bool:
@@ -174,25 +181,25 @@ def _is_inside(b: Block) -> bool:
     return (b.kind == "bullet" and not b.numbered) or (b.kind == "paragraph" and b.level > 0 and not b.spacer)
 
 
-def _convert_blocks(blocks: list[Block]) -> None:
+def _convert_blocks(blocks: list[Block], in_cell: bool) -> None:
     run: list[Block] = []
     for b in blocks + [None]:
         if _is_item(b) or (run and b is not None and _is_inside(b)):
             run.append(b)
             continue
         if run:
-            _convert_with_inside(run)
+            _convert_with_inside(run, in_cell)
             run = []
         if b is not None and b.kind == "table":
             for cell in b.table.cells:
-                _convert_blocks(cell.blocks)
+                _convert_blocks(cell.blocks, True)
 
 
-def _convert_with_inside(seq: list[Block]) -> None:
+def _convert_with_inside(seq: list[Block], in_cell: bool) -> None:
     """Convert the list items in `seq`; content between two items of the same
     converted list stays inside it (indented under the item above it)."""
     items = [b for b in seq if _is_item(b)]
-    _convert_run(items)
+    _convert_run(items, in_cell)
     last: Block | None = None
     for i, b in enumerate(seq):
         if b in items:

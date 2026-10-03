@@ -19,7 +19,7 @@ import pymupdf as fitz
 
 from ...model import Run
 from .layout import Box, Segment, analyse_drawings
-from .regions import DiagramRegion, TableRegion, find_diagrams, find_ruled_tables, find_tables
+from .regions import DiagramRegion, TableRegion, find_diagrams, find_pictures, find_ruled_tables, find_tables
 
 # Fonts whose characters are pictures, not letters. A line starting with one of
 # their characters (e.g. Wingdings "Ø", which displays as an arrow) is a bullet.
@@ -152,19 +152,24 @@ PageItem = Union[Line, TableRegion, DiagramRegion]
 MIN_GUTTER = 18
 
 
-def extract_page(page: fitz.Page, page_index: int) -> list[PageItem]:
+def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | None = None) -> list[PageItem]:
     """Return the page's content in reading order: Lines, plus TableRegion and
     DiagramRegion objects (whose own text is kept inside them)."""
     drawings = page.get_drawings()
     boxes, underline_segs = analyse_drawings(page, drawings)
-    raw_lines = _raw_lines(page)
+    # Slide/page numbers go first: otherwise one sitting at the same height as
+    # the last line of text gets glued onto it ("…not just to LPAs 32").
+    raw_lines = [sp for sp in (_drop_number_span(sp, page) for sp in _raw_lines(page))
+                 if sp and not _page_number(sp, page)]
 
     visible = [sp for sp in raw_lines if _visible(sp)]
     tables = find_tables(page, drawings)
     tables += find_ruled_tables(page, drawings,
-                                [(_rect(sp), _style_breaks(sp)) for sp in visible if not _page_number(sp, page)],
+                                _table_texts([sp for sp in visible if not _page_number(sp, page)]),
                                 [t.rect for t in tables])
     diagrams = find_diagrams(page, drawings, [_rect(sp) for sp in visible], [t.rect for t in tables])
+    diagrams += find_pictures(page, repeated_images or set(), [r.rect for r in [*tables, *diagrams]],
+                              [_rect(sp) for sp in visible])
 
     def build(span_lists: list[list[_Span]]) -> list[Line]:
         lines = [_build_line(g, page, page_index, boxes, underline_segs) for g in _group_visual(span_lists)]
@@ -277,9 +282,28 @@ def _raw_lines(page: fitz.Page) -> list[list[_Span]]:
                 ]
                 if chars:
                     spans.append(_Span(chars, s["size"], s["font"], s["flags"], s["color"], *s["bbox"]))
-            if spans:
-                out.append(spans)
+            out.extend(_split_baselines(spans))
     return out
+
+
+def _split_baselines(spans: list[_Span]) -> list[list[_Span]]:
+    """PyMuPDF sometimes puts text from two different lines into one line when
+    they overlap vertically, e.g. the last word of a left-column line and a
+    slightly lower right-column heading. Split where the baseline jumps
+    between text of the same size (a superscript is smaller, so stays)."""
+    parts: list[list[_Span]] = []
+    for s in spans:
+        if parts:
+            prev = parts[-1][-1]
+            jump = abs(s.chars[0].origin_y - prev.chars[0].origin_y)
+            same_size = abs(s.size - prev.size) <= 0.15 * max(s.size, prev.size)
+            if same_size and jump > 0.3 * max(s.size, prev.size):
+                parts.append([s])
+                continue
+            parts[-1].append(s)
+        else:
+            parts.append([s])
+    return [p for p in parts if p]
 
 
 def _page_number(spans: list[_Span], page: fitz.Page) -> bool:
@@ -288,6 +312,64 @@ def _page_number(spans: list[_Span], page: fitz.Page) -> bool:
     sits inside a table's area."""
     text = "".join(ch.c for s in spans for ch in s.chars).strip()
     return text.isdigit() and len(text) <= 3 and _rect(spans).y0 > page.rect.height * 0.9
+
+
+def _words(spans: list[_Span]) -> list[tuple[float, float]]:
+    """(x0, x1) of each word on a raw line."""
+    out: list[list[float]] = []
+    prev_x1: float | None = None
+    for s in spans:
+        for ch in s.chars:
+            if ch.c.isspace():
+                prev_x1 = None
+                continue
+            if prev_x1 is None or ch.x0 - prev_x1 > 0.25 * s.size:
+                out.append([ch.x0, ch.x1])
+            else:
+                out[-1][1] = ch.x1
+            prev_x1 = ch.x1
+    return [(a, b) for a, b in out]
+
+
+def _table_texts(lines: list[list[_Span]]) -> list[tuple[fitz.Rect, list[float], list[tuple[float, float]]]]:
+    """(box, style breaks, words) per text line, for finding ruled tables. A bullet
+    glyph that PyMuPDF keeps as its own line ("•" ... "Keep accounts") is
+    joined to the text beside it, so the gap between them doesn't look like
+    a column edge."""
+    rects = [(_rect(sp), _style_breaks(sp), "".join(ch.c for s in sp for ch in s.chars).strip(), _words(sp))
+             for sp in lines]
+    out = []
+    for r, brk, text, words in rects:
+        if text in BULLET_GLYPHS:
+            mate = next((o for o in rects if o[2] != text and 0 < o[0].x0 - r.x1 <= 40
+                         and min(o[0].y1, r.y1) - max(o[0].y0, r.y0) > 0.5 * r.height), None)
+            if mate is not None:
+                continue  # covered by its text's box below
+        else:
+            glyph = next((o for o in rects if o[2] in BULLET_GLYPHS and 0 < r.x0 - o[0].x1 <= 40
+                          and min(o[0].y1, r.y1) - max(o[0].y0, r.y0) > 0.5 * r.height), None)
+            if glyph is not None:
+                r = fitz.Rect(glyph[0].x0, r.y0, r.x1, r.y1)
+                words = glyph[3] + words
+        out.append((r, brk, words))
+    return out
+
+
+def _drop_number_span(spans: list[_Span], page: fitz.Page) -> list[_Span]:
+    """Remove a slide number that the PDF put in the same line as some text:
+    a short run of digits at the bottom of the page, far to the right of the
+    text or in a much smaller font."""
+    if len(spans) < 2:
+        return spans
+    last = spans[-1]
+    digits = "".join(ch.c for ch in last.chars).strip()
+    if not (digits.isdigit() and len(digits) <= 3 and last.y0 > page.rect.height * 0.9):
+        return spans
+    rest = spans[:-1]
+    gap = last.x0 - max(s.x1 for s in rest)
+    if gap > 3 * last.size or last.size < 0.75 * max(s.size for s in rest):
+        return rest
+    return spans
 
 
 def _style_breaks(spans: list[_Span]) -> list[float]:
@@ -431,7 +513,11 @@ def _build_line(spans, page, page_index, boxes: list[Box], segs: list[Segment]) 
         colour = colour_hex(s.color)
         small = s.size < 0.85 * dom_size
         origin = s.chars[0].origin_y
-        superscript = bool(s.flags & 1) or (small and origin < baseline - 0.15 * dom_size)
+        # PyMuPDF's superscript flag is a guess, and it sometimes marks a whole
+        # line of normal text (a line set a little higher than its neighbour).
+        # Real superscripts are short ("rd" in 3rd) or in a smaller font.
+        flagged = bool(s.flags & 1) and (small or len("".join(ch.c for ch in s.chars).strip()) <= 4)
+        superscript = flagged or (small and origin < baseline - 0.15 * dom_size)
         subscript = (not superscript) and small and origin > baseline + 0.08 * dom_size
 
         # Insert a space where there's a visible gap between spans (tabs, or

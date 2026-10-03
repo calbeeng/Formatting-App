@@ -12,6 +12,7 @@ from ..base import NoTextLayerError, ParseError
 from .extract import Line, extract_page
 from .furniture import remove_furniture
 from .layout import is_slide_deck
+from .regions import repeated_images
 from .slides import build_slide_blocks
 from .structure import build_document_blocks, resolve_line_hyphens
 
@@ -37,7 +38,8 @@ class PdfParser:
                 raise ParseError("This PDF is password-protected. Remove the password and try again.")
             pages = list(pdf)
             warnings = _check_text_layer(pages)
-            lines_by_page = [extract_page(p, i) for i, p in enumerate(pages)]
+            logos = repeated_images(pages)
+            lines_by_page = [extract_page(p, i, logos) for i, p in enumerate(pages)]
             body_size = _body_size(lines_by_page)
             slides = is_slide_deck(pages, body_size)
             cleaned, _removed = remove_furniture(lines_by_page, body_size, slides)
