@@ -19,8 +19,8 @@ import pymupdf as fitz
 
 from ...model import Run
 from .layout import Box, Segment, analyse_drawings
-from .regions import (DiagramRegion, TableRegion, add_title_row, find_diagrams, find_pictures,
-                      find_ruled_tables, find_tables)
+from .regions import (DiagramRegion, TableRegion, add_title_row, find_box_rows, find_diagrams,
+                      find_pictures, find_ruled_tables, find_tables)
 
 # Fonts whose characters are pictures, not letters. A line starting with one of
 # their characters (e.g. Wingdings "Ø", which displays as an arrow) is a bullet.
@@ -93,6 +93,9 @@ class Line:
     # Inside a process banner (a row of chevrons/boxes such as "1. Documents >
     # 2. Issue Certificate > 3. Registration"): the step this slide is about
     banner: bool = False
+    # Which small filled shape (a box in a graphic) the line sits in; -1 = none.
+    # Lines sharing a box are one point, whatever their spacing.
+    shape: int = -1
 
     @property
     def text(self) -> str:
@@ -179,6 +182,8 @@ def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | N
     for t in tables:
         if t.ruled:
             _title_row_above(t, visible, page)
+    tables += find_box_rows(page, repeated_images or set(), [_rect(sp) for sp in visible],
+                            [t.rect for t in tables])
     diagrams = find_diagrams(page, drawings, [_rect(sp) for sp in visible], [t.rect for t in tables])
     diagrams += find_pictures(page, repeated_images or set(), [r.rect for r in [*tables, *diagrams]],
                               [_rect(sp) for sp in visible])
@@ -243,10 +248,19 @@ def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | N
         for region in [*tables, *diagrams]:
             items.append((0 if region.y0 < col_top else 3, region.y0, region))
 
+    small_shapes = [fitz.Rect(d["rect"]) for d in drawings
+                    if d.get("fill") is not None and not all(c > 0.97 for c in d["fill"])
+                    and 60 <= d["rect"].width <= 0.6 * page.rect.width
+                    and 25 <= d["rect"].height <= 0.35 * page.rect.height]
     for _, _, it in items:
-        if isinstance(it, Line) and banners:
-            c = fitz.Point((it.x0 + it.x1) / 2, (it.y0 + it.y1) / 2)
+        if not isinstance(it, Line):
+            continue
+        c = fitz.Point((it.x0 + it.x1) / 2, (it.y0 + it.y1) / 2)
+        if banners:
             it.banner = any(r.contains(c) for r in banners)
+        inside = [i for i, r in enumerate(small_shapes) if r.contains(c)]
+        if inside:
+            it.shape = min(inside, key=lambda i: small_shapes[i].width * small_shapes[i].height)
     items.sort(key=lambda it: (it[0], it[1]))
     return [it[2] for it in items]
 

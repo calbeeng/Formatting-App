@@ -455,3 +455,50 @@ def add_title_row(table: TableRegion, rect: fitz.Rect) -> None:
                                    colspan=table.n_cols))
     table.n_rows += 1
     table.rect = fitz.Rect(table.rect.x0, rect.y0 - 1, table.rect.x1, table.rect.y1)
+
+
+def find_box_rows(page: fitz.Page, skip: set[int], text_rects: list[fitz.Rect],
+                  exclude: list[fitz.Rect]) -> list[TableRegion]:
+    """Two or more picture boxes side by side with text on them (three
+    rounded boxes: "no reasonable cause of action" | "abuse of process…" |
+    "…in the interests of justice…"). Read as plain text, their lines would
+    run into each other, so the row becomes a one-row table, a cell per box."""
+    area = page.rect.width * page.rect.height
+    boxes: list[fitz.Rect] = []
+    for im in page.get_images(full=True):
+        if im[0] in skip:
+            continue
+        try:
+            rects = page.get_image_rects(im[0])
+        except Exception:
+            continue
+        for r in rects:
+            r = fitz.Rect(r) & page.rect
+            if r.is_empty or not 0.01 * area <= r.width * r.height <= 0.4 * area:
+                continue
+            centre = fitz.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
+            if any(e.contains(centre) for e in exclude):
+                continue
+            if any(r.contains(fitz.Point((t.x0 + t.x1) / 2, (t.y0 + t.y1) / 2)) for t in text_rects):
+                boxes.append(r)
+    boxes.sort(key=lambda r: r.x0)
+    out: list[TableRegion] = []
+    used: set[int] = set()
+    for i, r in enumerate(boxes):
+        if i in used:
+            continue
+        row = [r]
+        for j in range(i + 1, len(boxes)):
+            o = boxes[j]
+            if (j not in used and abs(o.y0 - r.y0) <= 15 and abs(o.height - r.height) <= 0.25 * r.height
+                    and o.x0 >= row[-1].x1 - 5):
+                row.append(o)
+                used.add(j)
+        if len(row) < 2:
+            continue
+        rect = fitz.Rect(row[0])
+        for o in row[1:]:
+            rect |= o
+        cells = [CellSpec(0, c, fitz.Rect(o)) for c, o in enumerate(row)]
+        out.append(TableRegion(rect, 1, len(row), cells, [1.0] * len(row)))
+    return out

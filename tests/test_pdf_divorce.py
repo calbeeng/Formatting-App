@@ -17,7 +17,8 @@ def test_no_loose_slide_numbers(divorce):
 
 
 def test_bullet_levels_are_sane(divorce):
-    assert max(b.level for b in divorce.blocks if b.kind == "bullet") <= 2
+    # (one more than the slides' own levels: bullets nest under the paragraph above them)
+    assert max(b.level for b in divorce.blocks if b.kind == "bullet") <= 3
 
 
 def test_merged_header_cell(divorce):

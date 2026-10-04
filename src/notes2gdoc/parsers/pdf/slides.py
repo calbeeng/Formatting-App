@@ -139,7 +139,7 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
                 prev_title_page = slide_no
 
         # --- Subtitle: bold, non-bullet line(s) straight after the title -------
-        if title_lines and body and isinstance(body[0], Line) and _is_subtitle(body[0]):
+        if title_lines and body and isinstance(body[0], Line) and _is_subtitle(body[0], title_lines[0]):
             sub = [body.pop(0)]
             while body and isinstance(body[0], Line) and not body[0].bullet \
                     and body[0].bold_ratio >= 0.6 and _wraps_line(sub[-1], body[0]):
@@ -154,10 +154,14 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
             prev_subtitle = None
 
         # --- Body ------------------------------------------------------------
+        body_lines = [it for it in body if isinstance(it, Line)]
+        pitch = _line_pitch(body_lines)
+        right_edge = max((ln.x1 for ln in body_lines), default=0.0)
         open_: OpenBlock | None = None
         # The most recent bullet's (glyph x, level), for paragraphs that sit
         # inside a list, like an indented quote under a bullet.
         last_bullet: tuple[float, int] | None = None
+        base_x: float | None = None
         first_x: dict[int, float] = {}   # paragraph -> left edge of its first line
 
         def close():
@@ -186,7 +190,7 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
                 continue
             ln = it
             # "– 2101]" style continuation, not a dash bullet
-            if ln.bullet in DASH_BULLETS and open_ and _wraps(open_, ln):
+            if ln.bullet in DASH_BULLETS and open_ and _wraps(open_, ln, pitch, right_edge):
                 ln.pieces, ln.bullet = ln.pieces_with_glyph, None
             if ln.bullet:
                 close()
@@ -197,7 +201,7 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
                 open_ = OpenBlock(b, ln.text_x0, ln, [ln])
                 last_bullet = (ln.level_x, level)
                 continue
-            if open_ and _wraps(open_, ln):
+            if open_ and _wraps(open_, ln, pitch, right_edge):
                 join_line(open_.block, ln)
                 open_.last = ln
                 open_.lines.append(ln)
@@ -205,16 +209,20 @@ def build_slide_blocks(pages: list[list], settings: Settings) -> list[Block]:
             close()
             b = Block("paragraph", ln.runs(), page=slide_no)
             first_x[id(b)] = ln.x0
-            if last_bullet and ln.level_x > last_bullet[0] + INDENT_TOLERANCE:
-                # Indented past the bullet above it: it's part of that list
-                # item (e.g. a quoted clause), so indent it to the bullet's text.
+            if base_x is None and last_bullet is None:
+                base_x = ln.level_x  # left edge of the slide's main paragraphs
+            if (last_bullet and ln.level_x > last_bullet[0] + INDENT_TOLERANCE
+                    and (base_x is None or ln.level_x > base_x + INDENT_TOLERANCE)):
+                # Indented past the bullet above it (and past the slide's main
+                # paragraphs): it's part of that list item (e.g. a quoted
+                # clause), so indent it to the bullet's text.
                 b.level = last_bullet[1] + 1
                 b.note = f"paragraph inside a list, indent level {b.level}"
             slide_blocks.append(b)
             open_ = OpenBlock(b, item_text_x(ln), ln, [ln])
         close()
         if not boilerplate:
-            slide_blocks = bulletise_slide(slide_blocks, lambda b: first_x.get(id(b), 0.0))
+            slide_blocks = bulletise_slide(slide_blocks, lambda b: first_x.get(id(b), 0.0), nest_bullets=True)
 
         if merged_note and slide_blocks:
             slide_blocks[0].note = merged_note + (f"; {slide_blocks[0].note}" if slide_blocks[0].note else "")
@@ -238,9 +246,15 @@ def _is_section_slide(lines: list[Line], has_regions: bool) -> bool:
     )
 
 
-def _is_subtitle(ln: Line) -> bool:
+# A subtitle is nearly as big as the slide title (36pt under a 44pt title).
+# A bold line in body-sized text is the first point of the slide instead.
+SUBTITLE_MIN_SIZE = 0.7
+
+
+def _is_subtitle(ln: Line, title: Line) -> bool:
     # Not in a column: a bold line atop one column is that column's heading
-    return not ln.bullet and ln.column == 0 and ln.bold_ratio >= 0.6 and len(ln.text.strip()) <= 120
+    return (not ln.bullet and ln.column == 0 and ln.bold_ratio >= 0.6 and len(ln.text.strip()) <= 120
+            and ln.size >= SUBTITLE_MIN_SIZE * title.size)
 
 
 def _split_title(items: list) -> tuple[list[Line], list]:
@@ -268,8 +282,52 @@ def _wraps_line(prev: Line, ln: Line) -> bool:
     return 0 < ln.y0 - prev.y0 <= SLIDE_WRAP_SPACING * max(ln.size, prev.size)
 
 
-def _wraps(open_: OpenBlock, ln: Line) -> bool:
+# A gap this much bigger than the slide's normal line spacing starts a new
+# paragraph (decks with tight lines and only a little space between
+# paragraphs: lines 16pt apart, paragraphs 30pt apart).
+PARAGRAPH_GAP = 1.4
+
+
+def _line_pitch(lines: list[Line]) -> dict[int, float]:
+    """The normal distance between wrapped lines on this slide, per font size:
+    the smallest gap between two lines of that size, one under the other."""
+    pitch: dict[int, float] = {}
+    ordered = sorted(lines, key=lambda l: (l.column, l.y0))
+    for a, b in zip(ordered, ordered[1:]):
+        dy = b.y0 - a.y0
+        if a.column == b.column and abs(a.size - b.size) <= 0.6 and 0.5 * a.size < dy:
+            key = round(a.size)
+            pitch[key] = min(pitch.get(key, dy), dy)
+    return pitch
+
+
+def _new_paragraph(open_: OpenBlock, ln: Line, pitch: dict[int, float], right_edge: float) -> bool:
+    """Is `ln` a new paragraph, not a wrapped line of the open one?"""
+    if open_.block.kind not in ("paragraph", "bullet") or ln.bullet:
+        return False
+    normal = pitch.get(round(open_.last.size))
+    dy = ln.y0 - open_.last.y0
+    if normal and dy > PARAGRAPH_GAP * normal:
+        return True  # (also after a bullet: "Purpose? …" under a bullet's last line)
+    if open_.block.kind != "paragraph" or abs(ln.size - open_.last.size) > 0.6:
+        return False
+    # A short last line that ends a sentence, with the next line a little
+    # further down than a wrapped line would be
+    prev = open_.last.text.rstrip()
+    short = open_.last.x1 < right_edge - 0.15 * (right_edge - open_.last.x0)
+    return bool(normal) and short and prev[-1:] in ".?!" and dy > 1.15 * normal
+
+
+def _wraps(open_: OpenBlock, ln: Line, pitch: dict[int, float] | None = None, right_edge: float = 0.0) -> bool:
     if is_new_item(open_, ln):
+        return False
+    # Lines in the same box of a graphic are one point
+    if (ln.shape >= 0 and ln.shape == open_.last.shape and not ln.bullet
+            and 0 < ln.y0 - open_.last.y0 <= ALIGNED_WRAP_SPACING * max(ln.size, open_.last.size)):
+        return True
+    if open_.last.shape != ln.shape:
+        return False
+    if pitch and _new_paragraph(open_, ln, pitch, right_edge):
         return False
     if hanging_wrap(open_, ln):
         return True

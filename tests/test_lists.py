@@ -208,3 +208,28 @@ def test_mca_deck_round_four():
     assert [b.level for b in jointly if b.kind == "bullet"] == [1, 1, 1, 1]
     bkr = next(b for b in doc.blocks if b.kind == "table" and "Functional Component" in b.text).table
     assert not bkr.cell(0, 0).blocks[0].hanging
+
+
+SAPT = SAMPLES / "2.%20Single%20Application%20Pending%20Trial.pdf"
+
+
+def test_sapt_deck():
+    """Body-sized bold lines, tight paragraphs, boxes drawn as pictures."""
+    doc = parse_sample(SAPT)
+    assert not any(b.style_key == "slide_subtitle" and "Permission is not required" in b.text for b in doc.blocks)
+    # Paragraphs split on the slightly bigger gap between them; "defence." stays with its sentence
+    p = find(doc, "Permission is not required to file the application if")
+    assert p.kind == "bullet" and "entire action or defence. See Order 9 Rule 9(7)(h)." in p.text
+    assert find(doc, "Amendment by written agreement").text == "Amendment by written agreement. See Order 9 Rule 14(5)."
+    # "- Note that …" is a sub-point; the slide's own bullets nest under their paragraph
+    note = find(doc, "Note that such an amendment")
+    assert (note.kind, note.level) == ("bullet", 1) and not note.text.startswith("-")
+    assert find(doc, "In general: see Sheagar").level == 1
+    # An all-bold line leads the paragraphs after it
+    assert find(doc, "Objectives of third party procedures").level == 0
+    assert find(doc, "“Regardless of which limb").level == 1
+    # Three picture boxes side by side: a one-row table
+    t = next(b for b in doc.blocks if b.kind == "table" and "abuse of process" in b.text).table
+    assert (t.n_rows, t.n_cols) == (1, 3) and "Order 9 Rule 16(1)(b)" in t.cell(0, 1).text
+    # Lines in one box of a graphic are one point
+    assert find(doc, "All known adverse documents").text == "All known adverse documents Order 11, Rule 2(1)(b)"

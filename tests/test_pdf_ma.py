@@ -61,9 +61,11 @@ def test_section_divider_slides(ma):
         assert b.style_key == "section_title"
 
 
-def test_subtitle_under_title(ma):
+def test_bold_line_leads_its_bullets(ma):
+    # A bold line in body-sized text is a main point; the slide's bullets nest under it
     b = find(ma, "Some questions that could impact deal structure")
-    assert b.kind == "heading" and b.style_key == "slide_subtitle"
+    assert b.kind == "bullet" and b.level == 0
+    assert find(ma, "Does the Buyer only want to acquire").level == 1
 
 
 def test_comparison_table(ma):

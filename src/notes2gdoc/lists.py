@@ -303,12 +303,19 @@ _INDENT_STEP = 4.0
 _PROSE_CHARS = 60
 
 
-def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
-    """Slide text without bullets of its own reads as a list of points, so make
-    each paragraph a bullet. Slides that already have bullets ("•") or typed
-    numbers ("1.", "(a)") keep their own format. `indent_of(block)` gives a paragraph's left
-    edge, to spot text indented under the paragraph above it.
+def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) -> list[Block]:
+    """Slide text reads as a list of points, so each paragraph becomes a
+    bullet. `indent_of(block)` gives a paragraph's left edge, to spot text
+    indented under the paragraph above it.
 
+    * Slides with typed numbers ("1.", "(a)") keep their own format: lines
+      between the items stay plain text.
+    * Slides with bullets of their own ("•"): left alone, unless
+      `nest_bullets` (PDF slide decks), where the paragraphs become the main
+      points and the slide's bullets nest under the paragraph above them.
+    * An all-bold line ("Objectives of third party procedures") leads a
+      group: the plain paragraphs after it nest under it, until the next
+      paragraph that is bold or starts in bold.
     * A paragraph ending ":" with indented text under it ("NOTE: Section 6(11)
       MCA:" + the quoted subsection) is one point.
     * A paragraph introducing a lettered/roman list ("… any of the following:"
@@ -317,20 +324,26 @@ def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
       affairs," / "when P no longer has capacity…") joins that item.
     Returns the new block list (merged paragraphs are removed)."""
     texts = [b for b in blocks if b.kind in ("paragraph", "bullet") and not b.spacer]
-    if not texts or any(b.kind == "bullet" for b in texts):
+    numbered_slide = any(b.kind == "paragraph" and not b.spacer and marker_of(b.text) for b in blocks)
+    has_bullets = any(b.kind == "bullet" for b in texts)
+    if not texts or (has_bullets and (numbered_slide or not nest_bullets)):
         return blocks
     out: list[Block] = []
     last_item: Block | None = None    # most recent typed list item
     point: Block | None = None        # most recent plain point
-    # A slide with typed numbering ("1.", "2.") already has its own list
-    # format: lines between the items (e.g. "Who are 'relevant persons'?")
-    # stay plain text instead of becoming bullets.
-    numbered_slide = any(b.kind == "paragraph" and not b.spacer and marker_of(b.text) for b in blocks)
     plain_points: set[int] = set()
+    shift = 0                         # how far the slide's own bullets move in
+    lead = False                      # inside an all-bold line's group
     for b in blocks:
+        if b.kind == "bullet" and not b.numbered:
+            b.level += shift
+            out.append(b)
+            last_item = None
+            continue
         if b.kind != "paragraph" or b.spacer:
             out.append(b)
             last_item = point = None
+            shift, lead = 0, False
             continue
         if marker_of(b.text):
             out.append(b)
@@ -347,14 +360,30 @@ def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
             _append(point, b)
             continue
         if b.level:  # indented under something else: leave it be
+            b.level += shift
             out.append(b)
-            last_item = point = None
+            last_item = None
             continue
         if numbered_slide:
             plain_points.add(id(b))
+        elif point is not None and _DASH_START.match(b.text):
+            # "- Note that …" typed with a dash: a sub-point of the one above
+            b.runs = _strip_marker(b.runs, _DASH_START.match(b.text).group(0))
+            b.kind, b.level = "bullet", point.level + 1
+            b.note = (b.note + "; " if b.note else "") + "dash line -> sub-bullet"
+            out.append(b)
+            last_item = None
+            continue
         else:
-            b.kind, b.level = "bullet", 0
+            if _all_bold(b):
+                level, lead = 0, True
+            elif _starts_bold(b):
+                level, lead = 0, False
+            else:
+                level = 1 if lead else 0
+            b.kind, b.level = "bullet", level
             b.note = (b.note + "; " if b.note else "") + "slide paragraph -> bullet"
+            shift = level + 1
         out.append(b)
         point, last_item = b, None
 
@@ -369,9 +398,25 @@ def bulletise_slide(blocks: list[Block], indent_of) -> list[Block]:
             continuing = prev is not None and prev.kind == "paragraph" and marker_of(prev.text)
             n = n + 1 if continuing else 1
             b.kind = "paragraph"
+            b.level = 0
             b.runs = [Run(f"{n}. ")] + b.runs
             b.note += f"; introduces a list, numbered {n}."
     return out
+
+
+_DASH_START = re.compile(r"^\s*[-–—]\s+")
+
+
+def _all_bold(b: Block) -> bool:
+    """A short line entirely in bold: the lead-in to the text under it."""
+    visible = [r for r in b.runs if r.text.strip()]
+    text = b.text.strip()
+    return bool(visible) and all(r.bold for r in visible) and len(text) <= 120 and not text.endswith(".")
+
+
+def _starts_bold(b: Block) -> bool:
+    first = next((r for r in b.runs if r.text.strip()), None)
+    return first is not None and first.bold
 
 
 def _carries_on(item: Block, b: Block) -> bool:

@@ -33,3 +33,7 @@ settings.json
 dry_run*/
 dry_run*.json
 *.outline.debug.txt
+
+# Downloaded app builds
+*.exe
+*.zip
