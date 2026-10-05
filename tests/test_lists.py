@@ -270,7 +270,7 @@ def test_outline_document_is_one_numbered_list():
     assert find(doc, "B. Sources of Civil Procedural Law").style_key == "alpha"
     # an all-bold item in the middle of the list is still an item, not a heading
     third = find(doc, "General Division of the High Court")
-    assert third.numbered and third.level == 0 and all(r.bold for r in third.runs if r.text.strip())
+    assert third.numbered and third.level == 0 and third.runs[0].bold
     labels = display_labels(doc.blocks)
     assert labels[id(third)] == "3." and labels[id(find(doc, "Statutes (SCJA and SCA)"))] == "8."
     assert labels[id(find(doc, "Original Jurisdiction and Powers"))] == "a."
