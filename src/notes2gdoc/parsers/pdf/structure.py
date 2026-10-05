@@ -280,6 +280,10 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
     candidates: list[tuple[Block, HeadingCandidate]] = []
     open_: OpenBlock | None = None
     seen_structure = False
+    last_letter: str | None = None        # last "A." / "B." section heading
+    was_bold: dict[int, bool] = {}        # numbered heading -> all bold in the source
+    tails: dict[int, Block] = {}          # numbered heading -> the plain text wrapped under it
+    tail_of: Block | None = None
 
     def close():
         nonlocal open_
@@ -331,6 +335,30 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
                 line.pieces = line.pieces_with_glyph
                 line.bullet = None
 
+            # --- A section heading wrapping onto a second (often centred) line --
+            if (open_ and open_.block.kind == "heading" and open_.block.label is None
+                    and open_.last.page == line.page and not line.bullet and line.bold_ratio >= 0.9
+                    and 0 < line.y0 - open_.last.y0 <= WRAP_SPACING * max(line.size, open_.last.size)
+                    and abs(line.size - open_.last.size) <= 1
+                    and not _SECTION.match(text) and not match_marker(text)):
+                _join_heading(open_.block, strip_uniform_style(line.runs(), bold=True, italic=True))
+                open_.last = line
+                open_.lines.append(line)
+                continue
+
+            # --- Section heading: "I. INTRODUCTION", "A. Sources of …" ---------
+            section = _section_heading(line, text, last_letter)
+            if section:
+                close()
+                key, last_letter = section
+                block = Block("heading", strip_uniform_style(line.runs(), bold=True, italic=True),
+                              style_key=key, page=page_idx + 1,
+                              note="bold section line (roman numeral)" if key == "decimal" else "bold section line (letter)")
+                blocks.append(block)
+                open_ = OpenBlock(block, line.x0, line, [line])
+                seen_structure = True
+                continue
+
             # --- Heading -------------------------------------------------------
             marker = match_marker(text)
             if marker and _is_heading_line(line):
@@ -339,6 +367,7 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
                 block = Block("heading", runs, label=marker.label, page=page_idx + 1)
                 blocks.append(block)
                 candidates.append((block, HeadingCandidate(marker, x=line.x0)))
+                was_bold[id(block)] = all(r.bold for r in line.runs() if r.text.strip())
                 open_ = OpenBlock(block, _text_after_label_x(line), line, [line])
                 seen_structure = True
                 continue
@@ -371,10 +400,15 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
                     open_.last = line
                     open_.lines.append(line)
                     continue
+                if kind == "heading" and not heading_ok and id(open_.block) in was_bold:
+                    tail_of = open_.block  # wrapped text of a numbered "heading"; see _demote_list_items
 
             # --- New paragraph -------------------------------------------------
             close()
             block = Block("paragraph", line.runs(), page=page_idx + 1)
+            if tail_of is not None:
+                tails[id(tail_of)] = block
+                tail_of = None
             if line.in_box:
                 block.note = "inside a bordered box"
             if not seen_structure and page_idx == 0 and _is_centred(line):
@@ -383,6 +417,8 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
             blocks.append(block)
             open_ = OpenBlock(block, item_text_x(line), line, [line])
     close()
+
+    candidates = _demote_list_items(blocks, candidates, was_bold, tails)
 
     # Decide alpha vs roman for "(i)"-style markers, now that we can look ahead.
     cands = [c for _, c in candidates]
@@ -513,6 +549,83 @@ def _join_heading(block: Block, runs: list[Run]) -> None:
     if not block.text.endswith(" "):
         block.runs.append(Run(" "))
     block.runs = merge_runs(block.runs + runs)
+
+
+_SECTION = re.compile(r"^([IVXLC]{1,6}|[A-Z])\.\s+\S")
+_ROMAN = re.compile(r"^(X{0,3})(IX|IV|V?I{0,3})$")
+
+
+def _section_heading(line: Line, text: str, last_letter: str | None) -> tuple[str, str | None] | None:
+    """An all-bold line starting "I." / "II." (roman numeral) or "A." / "B."
+    (letter): a section heading of an outline. Returns (style key, last
+    letter seen). Roman numerals map to the top heading level, letters to the
+    next. "I." counts as the letter only straight after "H."."""
+    m = _SECTION.match(text)
+    if not m or line.bullet or line.in_box or line.bold_ratio < 0.9:
+        return None
+    tok = m.group(1)
+    is_next_letter = len(tok) == 1 and last_letter is not None and ord(tok) == ord(last_letter) + 1
+    if _ROMAN.match(tok) and not is_next_letter:
+        return "decimal", None      # a new part: its letters start again
+    if len(tok) == 1:
+        return "alpha", tok
+    return None
+
+
+def _demote_list_items(blocks, candidates, was_bold, tails):
+    """A numbered line in bold isn't a heading when it's one item of a list
+    whose other items are ordinary text:
+
+        2. **Appellate Division**: see section 3 …
+        3. **General Division of the High Court**:        <- all bold, still item 3
+        4. **District Court**: see sections 2 …
+
+    Items are grouped into runs that count up (1, 2, 3 … or a, b, c …); a run
+    with any ordinary paragraph in it is a list, so its bold lines become
+    paragraphs too (keeping their bold). `tails`: the plain text that wrapped
+    under such a line. Returns the remaining candidates."""
+    from ...lists import _classify, marker_of
+
+    heading_ids = {id(b) for b, _ in candidates}
+    runs: dict[str, list[Block]] = {}
+    last: dict[str, int] = {}
+    demote: set[int] = set()
+
+    def flush(typ: str) -> None:
+        run = runs.pop(typ, [])
+        if any(id(b) in heading_ids for b in run) and any(id(b) not in heading_ids for b in run):
+            demote.update(id(b) for b in run if id(b) in heading_ids)
+
+    for b in blocks:
+        if b.kind not in ("heading", "paragraph") or (b.kind == "heading" and id(b) not in heading_ids):
+            continue
+        m = marker_of(b.text)
+        if not m:
+            continue
+        typed = _classify(m[0], last)
+        if typed is None:
+            continue
+        typ, val = typed
+        if typ in runs and val != last.get(typ, 0) + 1:
+            flush(typ)
+        runs.setdefault(typ, []).append(b)
+        last[typ] = val
+    for typ in list(runs):
+        flush(typ)
+
+    for b, _ in candidates:
+        if id(b) in demote:
+            b.kind, b.label = "paragraph", None
+            if was_bold.get(id(b)):
+                b.runs = [replace(r, bold=True) for r in b.runs]
+            b.note = "bold numbered line inside a list of ordinary items: kept as a list item"
+            # The rest of its sentence was split off (plain text under a
+            # heading starts a new paragraph); as a list item it's one paragraph
+            tail = tails.get(id(b))
+            if tail is not None and any(t is tail for t in blocks):
+                b.runs = normalise_whitespace(merge_runs(b.runs + [Run(" ")] + tail.runs))
+                blocks[:] = [t for t in blocks if t is not tail]
+    return [(b, c) for b, c in candidates if id(b) not in demote]
 
 
 def _is_heading_line(line: Line) -> bool:

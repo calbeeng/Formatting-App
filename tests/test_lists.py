@@ -16,9 +16,9 @@ def P(text, level=0):
     return Block("paragraph", [Run(text)], level=level)
 
 
-def convert(*blocks):
+def convert(*blocks, pdf=False):
     doc = Document(list(blocks))
-    convert_numbered_lists(doc)
+    convert_numbered_lists(doc, hang=pdf)   # pdf: lists may carry on past headings and text
     return doc.blocks
 
 
@@ -45,18 +45,42 @@ def test_restarted_numbering_is_a_new_list():
     assert list(display_labels(b).values()) == ["1.", "2.", "1.", "2."]
 
 
-def test_note_between_items_stays_inside_the_list():
+def test_bullet_between_items_stays_a_bullet_inside_the_list():
     note = Block("bullet", [Run("The Court of Appeal ruled ...")], level=0)
     b = convert(P("1. To avoid doubt"), note, P("2. Take detailed attendance notes"))
-    assert b[1].in_list and b[1].kind == "paragraph" and b[1].level == 1
+    assert b[1].in_list and b[1].kind == "bullet" and b[1].level == 1
     assert list(display_labels(b).values()) == ["1.", "2."]
-    # In the doc: one list, the note un-numbered and indented under item 1
+    # In the doc: the two items share one numbered list, so "2." follows "1.";
+    # the bullet between them is a bulleted list of its own, nested one level in
     doc, _ = append(b)
     ps = paras(doc)[3:]
     assert [(p[1], p[2]) for p in ps] == [
-        (0, "To avoid doubt"), (None, "The Court of Appeal ruled ..."), (0, "Take detailed attendance notes")]
+        (0, "To avoid doubt"), (1, "The Court of Appeal ruled ..."), (0, "Take detailed attendance notes")]
     lists = [p["paragraph"].get("bullet", {}).get("listId") for p in _body(doc)[-3:]]
-    assert lists[0] == lists[2] and lists[0] is not None
+    assert lists[0] == lists[2] and lists[1] not in (None, lists[0])
+
+
+def test_list_carries_on_past_headings_and_text():
+    heading = Block("heading", [Run("B. Sources of Civil Procedural Law")], style_key="alpha")
+    b = convert(P("1. Court of Appeal"), P("(a) Original jurisdiction"), P("continuing text of (a)"),
+                P("2. District Court"), heading, P("3. Statutes"), P("ii. a stray label"), P("4. Case law"),
+                pdf=True)
+    numbered = [x.text for x in b if x.numbered]
+    assert numbered == ["Court of Appeal", "Original jurisdiction", "District Court", "Statutes", "Case law"]
+    assert list(display_labels(b).values()) == ["1.", "a.", "2.", "3.", "4."]
+    assert heading.in_list and heading.kind == "heading"
+    assert b[2].in_list and b[2].level == 2                        # text under item (a)
+    assert b[6].text == "ii. a stray label" and b[6].in_list       # typed, inside the list
+    # ...but a sub-level can't start after a heading ("a." on the next slide isn't under "3.")
+    h2 = Block("heading", [Run("Next slide")], style_key="slide_title")
+    c = convert(P("1. One"), P("2. Two"), h2, P("a. A male party"), P("b. A female party"), pdf=True)
+    assert [x.numbered is not None for x in c] == [True, True, False, False, False] and not h2.in_list
+    doc, _ = append(b)
+    body = [c["paragraph"] for c in _body(doc)[-8:]]
+    ids = [p.get("bullet", {}).get("listId") for p in body]
+    assert ids[0] is not None and ids[0] == ids[1] == ids[3] == ids[5] == ids[7]   # one list throughout
+    assert ids[2] is None and ids[4] is None and ids[6] is None
+    assert body[4]["paragraphStyle"]["namedStyleType"] == "HEADING_2"
 
 
 def _body(doc):
@@ -233,3 +257,30 @@ def test_sapt_deck():
     assert (t.n_rows, t.n_cols) == (1, 3) and "Order 9 Rule 16(1)(b)" in t.cell(0, 1).text
     # Lines in one box of a graphic are one point
     assert find(doc, "All known adverse documents").text == "All known adverse documents Order 11, Rule 2(1)(b)"
+
+
+CIVLIT = SAMPLES / "Civil_Litigation_Detailed_Syllabus_(B26S2).pdf"
+
+
+def test_outline_document_is_one_numbered_list():
+    """A legal outline: "I." / "A." section headings and one numbered list
+    (1. -> (a) -> i.) that keeps counting through the whole document."""
+    doc = parse_sample(CIVLIT)
+    assert find(doc, "I. INTRODUCTION").kind == "heading"
+    assert find(doc, "B. Sources of Civil Procedural Law").style_key == "alpha"
+    # an all-bold item in the middle of the list is still an item, not a heading
+    third = find(doc, "General Division of the High Court")
+    assert third.numbered and third.level == 0 and all(r.bold for r in third.runs if r.text.strip())
+    labels = display_labels(doc.blocks)
+    assert labels[id(third)] == "3." and labels[id(find(doc, "Statutes (SCJA and SCA)"))] == "8."
+    assert labels[id(find(doc, "Original Jurisdiction and Powers"))] == "a."
+    tops = [b for b in doc.blocks if b.numbered and b.level == 0]
+    assert labels[id(tops[-1])] == f"{len(tops)}." and len(tops) > 150      # no restarts, no gaps
+    # a stray label between items stays as typed text inside the list
+    assert find(doc, "ii. Originating Application").in_list
+    # the wrapped end of a bold item is part of that item
+    assert find(doc, "Conversion of originating application").text.endswith("Order 15 Rule 7(6)(c) of the ROC 2021.")
+    # written in one piece, so the numbering can't start again half-way
+    from notes2gdoc.gdocs import writer
+    texts = [seg for kind, seg in writer.segments([b for b in doc.blocks if b.selected]) if kind == "text"]
+    assert sum(1 for seg in texts if any(b.numbered for b in seg)) == 1

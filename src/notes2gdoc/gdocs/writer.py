@@ -269,12 +269,21 @@ def text_requests(
             "range": _range(starts[first], starts[last] + len(paras[last][1]) + 1, tab_id),
             "bulletPreset": paras[first][0].numbered or bullet_preset,
         }})
-        removed = 0  # tabs already consumed by this group's items above
+        # Where each member starts once this group's leading tabs are gone
+        pos: dict[int, int] = {}
+        removed = 0
+        for i in range(first, last + 1):
+            pos[i] = starts[i] - removed
+            removed += tab_count(i)
+
+        def inner_bullet(i: int) -> bool:  # an ordinary bullet between numbered items
+            return paras[i][0].kind == "bullet" and not paras[i][0].numbered and bool(paras[first][0].numbered)
+
+        # Plain text and headings inside the list: no number, their own indent
         for i in range(first, last + 1):
             b, text, _ = paras[i]
             if b.kind != "bullet":
-                s0 = starts[i] - removed
-                rng = _range(s0, s0 + len(text) + 1, tab_id)
+                rng = _range(pos[i], pos[i] + len(text) + 1, tab_id)
                 indent = {"magnitude": LIST_INDENT_PT * b.level, "unit": "PT"}
                 reqs.append({"deleteParagraphBullets": {"range": rng}})
                 reqs.append({"updateParagraphStyle": {
@@ -282,7 +291,28 @@ def text_requests(
                     "paragraphStyle": {"indentStart": indent, "indentFirstLine": indent},
                     "fields": "indentStart,indentFirstLine",
                 }})
-            removed += tab_count(i)
+        # Bullets inside the list become bullets again: put their tabs back
+        # (for the nesting level) and make each stretch of them a bulleted
+        # list of its own. The numbered list keeps counting around them.
+        # Last stretch first, so earlier positions stay valid; each step
+        # leaves the text the same length as before it.
+        i = last
+        while i >= first:
+            if not inner_bullet(i):
+                i -= 1
+                continue
+            q = p_ = i
+            while p_ - 1 >= first and inner_bullet(p_ - 1):
+                p_ -= 1
+            for k in range(q, p_ - 1, -1):
+                if tab_count(k):
+                    reqs.append({"insertText": {"location": _location(pos[k], tab_id), "text": "\t" * tab_count(k)}})
+            length = sum(len(paras[k][1]) + 1 for k in range(p_, q + 1))
+            reqs.append({"createParagraphBullets": {
+                "range": _range(pos[p_], pos[p_] + length, tab_id),
+                "bulletPreset": bullet_preset,
+            }})
+            i = p_ - 1
 
     tabs = sum(len(text) - len(text.lstrip("\t")) for b, text, _ in paras if b.kind == "bullet")
     return reqs, len(body) - tabs
@@ -347,7 +377,10 @@ def segments(blocks: list[Block]) -> list[tuple[str, list[Block]]]:
             out.append((b.kind, [b]))
         elif not b.text.strip() and not b.spacer:
             continue
-        elif out and out[-1][0] == "text" and len(out[-1][1]) < MAX_BLOCKS_PER_TEXT_SEGMENT:
+        elif out and out[-1][0] == "text" and (
+                len(out[-1][1]) < MAX_BLOCKS_PER_TEXT_SEGMENT
+                # never cut a numbered list in two: its second half would start again at 1
+                or b.in_list or (b.kind == "bullet" and b.numbered and not b.list_start)):
             out[-1][1].append(b)
         else:
             out.append(("text", [b]))

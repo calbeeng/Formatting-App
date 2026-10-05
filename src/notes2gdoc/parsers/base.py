@@ -63,7 +63,9 @@ def parse_file(path: str | Path, settings: Settings | None = None) -> Document:
     from ..tables import merge_split_tables
 
     merge_split_tables(doc)      # a table continued over several slides -> one table
-    convert_numbered_lists(doc)  # typed "1." / "a." lists -> real numbered lists
+    # typed "1." / "a." lists -> real numbered lists (in slides and PDFs, any
+    # that can't be real lists are still laid out like one)
+    convert_numbered_lists(doc, hang=doc.layout == "slides" or path.suffix.lower() == ".pdf")
     return doc
 
 

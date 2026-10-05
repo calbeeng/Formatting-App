@@ -101,16 +101,82 @@ def _strip_marker(runs: list[Run], marker_text: str) -> list[Run]:
     return [r for r in out if r.text]
 
 
-def _convert_run(items: list[Block], flat: bool = False) -> None:
-    """Split a run of marker paragraphs where the numbering starts again (a
-    second "1." straight after a list ending "3."), then convert each part."""
-    first_tok = marker_of(items[0].text)[0].lower()
+# After this many numbers in a row that don't fit, the list is taken to have
+# ended (rather than having a few stray lines in it).
+MAX_STRAYS = 3
+
+
+def _convert_run(items: list[Block], flat: bool = False, after_heading: set[int] | None = None) -> None:
+    """Convert a run of list items, coping with numbers that don't count up:
+
+    * a number that starts again (a second "1." after a list ending "3.")
+      begins a new list;
+    * a stray number in the middle ("ii. Originating Application" used as a
+      label between items 26 and 27) is left as plain text inside the list,
+      and the list carries on after it;
+    * several misfits in a row end the list.
+    So one odd number only affects itself, not a whole document of lists."""
     start = 0
-    for i in range(1, len(items) + 1):
-        if i == len(items) or marker_of(items[i].text)[0].lower() == first_tok:
-            if _convert_list(items[start:i], flat) and start:
-                items[start].list_start = True
-            start = i
+    last: dict[str, int] = {}
+    order: list[str] = []
+    rank = 0                    # nesting depth of the last item taken
+    after_heading = after_heading or set()
+    strays: list[int] = []      # indexes skipped in the current list
+    streak: list[int] = []      # misfits in a row, most recent last
+
+    def close(end: int) -> None:
+        part = [b for k, b in enumerate(items[start:end], start) if k not in strays]
+        if part and _convert_list(part, flat) and start:
+            part[0].list_start = True
+
+    i = 0
+    while i < len(items):
+        tok = marker_of(items[i].text)[0]
+        typed = _classify(tok, last)
+        fits = typed is not None and (i == start or typed[1] == last.get(typed[0], 0) + 1)
+        # A sub-level can't start after a heading: "a." on the next slide
+        # doesn't belong to "3." on this one
+        deeper = (fits and i > start and id(items[i]) in after_heading
+                  and (typed[0] not in order or order.index(typed[0]) > rank))
+        if deeper:
+            fits = False
+        if not fits:
+            fresh = _classify(tok, {})
+            # (after a heading, "i. Introduction" may just be a label: skip it,
+            # and only end the list if more such lines follow)
+            restarts = not deeper and fresh is not None and fresh[1] == 1
+            streak.append(i)
+            if restarts or len(streak) >= MAX_STRAYS:
+                first = i if restarts else streak[0]
+                strays = [k for k in strays if k < first]
+                close(first)
+                start, last, order, strays, streak, rank = first, {}, [], [], [], 0
+                i = first
+                typed = _classify(marker_of(items[i].text)[0], last)
+                if typed is None:
+                    start = i = i + 1
+                    continue
+            else:
+                strays.append(i)
+                i += 1
+                continue
+        else:
+            streak = []
+        typ, val = typed
+        if order and typ not in order and typ not in PRESETS[_PRESET_FOR_TOP[order[0]]]:
+            # A kind of number this list style has no level for ("A." under
+            # "1. / a. / i."): typed text inside the list
+            strays.append(i)
+            i += 1
+            continue
+        if typ not in order:
+            order.append(typ)
+        rank = order.index(typ)
+        last[typ] = val
+        for sub in order[rank + 1:]:  # sub-lists restart under a new parent
+            last.pop(sub, None)
+        i += 1
+    close(len(items))
 
 
 def _convert_list(items: list[Block], flat: bool = False) -> bool:
@@ -167,16 +233,20 @@ def _convert_list(items: list[Block], flat: bool = False) -> bool:
     return True
 
 
-def convert_numbered_lists(doc: Document) -> None:
+def convert_numbered_lists(doc: Document, hang: bool | None = None) -> None:
+    """`hang`: lay out the typed numbers that can't be real lists like a list
+    (slides and PDFs; Word files carry their own indents)."""
     slides = doc.layout == "slides"
+    if hang is None:
+        hang = slides
     # Google Docs nests list items in table cells unreliably, so on slides
     # lists in cells keep their typed numbers (laid out like a list below)
-    _convert_blocks(doc.blocks, False, cells=not slides)
-    if slides:
-        _hang_literal_items(doc.blocks)
+    _convert_blocks(doc.blocks, False, cells=not slides, gaps=hang)
+    if hang:
+        _hang_literal_items(doc.blocks, slides=slides)
 
 
-def _hang_literal_items(blocks: list[Block], in_cell: bool = False) -> None:
+def _hang_literal_items(blocks: list[Block], in_cell: bool = False, slides: bool = True) -> None:
     """Typed list items left as text (a lone "1." before a table, "2."-"4."
     after it, lists in table cells) are still laid out like a list: number
     hanging, wrapped lines indented, letters one level in from numbers. The
@@ -191,6 +261,8 @@ def _hang_literal_items(blocks: list[Block], in_cell: bool = False) -> None:
     item_level: int | None = None   # level of the last item, while in a run
     base = 0
     for b in blocks:
+        if b.in_list:
+            continue  # already placed inside a real list
         if _is_item(b):
             typed = _classify(marker_of(b.text)[0], last)
             if typed is None:
@@ -207,10 +279,16 @@ def _hang_literal_items(blocks: list[Block], in_cell: bool = False) -> None:
         if item_level is not None and b.kind == "bullet" and not b.numbered:
             b.level += item_level + 1
             continue
-        order, last, item_level = [], {}, None
+        item_level = None
+        # Which kind of number sits at which level is kept across plain text
+        # in between ("(a)" after a paragraph is still one level in). It
+        # starts afresh at a slide's heading or a table; in a document it
+        # holds throughout (an outline: 1. -> (a) -> i. on every page).
+        if b.kind == "table" or (slides and b.kind == "heading"):
+            order, last = [], {}
         if b.kind == "table":
             for cell in b.table.cells:
-                _hang_literal_items(cell.blocks, in_cell=True)
+                _hang_literal_items(cell.blocks, in_cell=True, slides=slides)
 
 
 def _is_item(b: Block | None) -> bool:
@@ -223,10 +301,20 @@ def _is_inside(b: Block) -> bool:
     return (b.kind == "bullet" and not b.numbered) or (b.kind == "paragraph" and b.level > 0 and not b.spacer)
 
 
-def _convert_blocks(blocks: list[Block], in_cell: bool, cells: bool = True) -> None:
+def _is_gap(b: Block) -> bool:
+    """Something a list can carry on past: a heading or a plain paragraph
+    ("B. Sources of Civil Procedural Law" between items 7 and 8). Tables and
+    pictures end a list: Google Docs can't continue one across them."""
+    return b.kind in ("heading", "paragraph")
+
+
+def _convert_blocks(blocks: list[Block], in_cell: bool, cells: bool = True, gaps: bool = True) -> None:
+    """`gaps`: a list may carry on past headings and plain text (PDFs and
+    slides). Without it (Word files) only bullets and indented text can sit
+    between a list's items."""
     run: list[Block] = []
     for b in blocks + [None]:
-        if _is_item(b) or (run and b is not None and _is_inside(b)):
+        if _is_item(b) or (run and b is not None and (_is_inside(b) or (gaps and _is_gap(b)))):
             run.append(b)
             continue
         if run:
@@ -235,26 +323,46 @@ def _convert_blocks(blocks: list[Block], in_cell: bool, cells: bool = True) -> N
         if b is not None and b.kind == "table":
             for cell in b.table.cells:
                 if cells:
-                    _convert_blocks(cell.blocks, True)
+                    _convert_blocks(cell.blocks, True, gaps=gaps)
 
 
 def _convert_with_inside(seq: list[Block], in_cell: bool) -> None:
     """Convert the list items in `seq`; content between two items of the same
-    converted list stays inside it (indented under the item above it)."""
+    converted list stays inside it: text and bullets indented under the item
+    above, headings as they are, with the numbering carrying on after."""
     items = [b for b in seq if _is_item(b)]
-    _convert_run(items, in_cell)
+    # Items that come after a heading: they can continue the list ("8." after
+    # "B. Sources …") but can't open a new sub-level of an item before it
+    after_heading: set[int] = set()
+    seen_heading = False
+    for b in seq:
+        if b.kind == "heading":
+            seen_heading = True
+        elif _is_item(b):
+            if seen_heading:
+                after_heading.add(id(b))
+            seen_heading = False
+    _convert_run(items, in_cell, after_heading)
     last: Block | None = None
     for i, b in enumerate(seq):
-        if b in items:
-            last = b if b.numbered else None
+        if b.numbered:
+            last = b
             continue
-        nxt = next((x for x in seq[i + 1:] if x in items), None)
+        # (a stray numbered line that didn't join the list counts as text in it)
+        nxt = next((x for x in seq[i + 1:] if x.numbered), None)
         if last is None or nxt is None or not nxt.numbered or nxt.list_start or nxt.numbered != last.numbered:
             continue
-        depth = b.level if b.kind == "bullet" else max(0, b.level - 1)
-        b.level = last.level + 1 + depth
-        b.kind = "paragraph"
         b.in_list = True
+        if b.kind == "heading" or b.spacer:
+            # the list carries on after it; the heading itself is untouched
+            b.note = (b.note + "; " if b.note else "") + "numbered list continues after this"
+            continue
+        if b.kind == "bullet":
+            b.level = last.level + 1 + b.level   # stays a bullet, nested under its item
+        elif b.level == 0:
+            b.level = last.level + 1             # text belonging to the item above
+        else:
+            b.level = last.level + 1 + max(0, b.level - 1)
         b.note = (b.note + "; " if b.note else "") + "inside the numbered list above"
 
 
@@ -324,7 +432,10 @@ def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) 
       affairs," / "when P no longer has capacity…") joins that item.
     Returns the new block list (merged paragraphs are removed)."""
     texts = [b for b in blocks if b.kind in ("paragraph", "bullet") and not b.spacer]
-    numbered_slide = any(b.kind == "paragraph" and not b.spacer and marker_of(b.text) for b in blocks)
+    # (a real list: two or more items, or one that starts a list; a quoted
+    # "4. Subject to Rules 5, 8 and 9 …" on its own is just a paragraph)
+    items = [marker_of(b.text)[0] for b in blocks if b.kind == "paragraph" and not b.spacer and marker_of(b.text)]
+    numbered_slide = len(items) >= 2 or (len(items) == 1 and items[0].lower() in ("1", "a", "i"))
     has_bullets = any(b.kind == "bullet" for b in texts)
     if not texts or (has_bullets and (numbered_slide or not nest_bullets)):
         return blocks
@@ -345,7 +456,7 @@ def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) 
             last_item = point = None
             shift, lead = 0, False
             continue
-        if marker_of(b.text):
+        if numbered_slide and marker_of(b.text):
             out.append(b)
             last_item, point = b, None
             continue
