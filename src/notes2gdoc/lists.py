@@ -276,7 +276,7 @@ def _hang_literal_items(blocks: list[Block], in_cell: bool = False, slides: bool
             b.hanging = True
             b.level = item_level = base + order.index(typ)
             continue
-        if item_level is not None and b.kind == "bullet" and not b.numbered:
+        if item_level is not None and b.kind == "bullet" and not b.numbered and not b.main_point:
             b.level += item_level + 1
             continue
         item_level = None
@@ -435,14 +435,24 @@ def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) 
     # (a real list: two or more items, or one that starts a list; a quoted
     # "4. Subject to Rules 5, 8 and 9 …" on its own is just a paragraph)
     items = [marker_of(b.text)[0] for b in blocks if b.kind == "paragraph" and not b.spacer and marker_of(b.text)]
-    numbered_slide = len(items) >= 2 or (len(items) == 1 and items[0].lower() in ("1", "a", "i"))
+    real_list = len(items) >= 2 or (len(items) == 1 and items[0].lower() in ("1", "a", "i"))
     has_bullets = any(b.kind == "bullet" for b in texts)
+    # Typed 1., 2., 3. on the slide: it has its own list format
+    numbered_slide = real_list and any(t.isdigit() for t in items)
+    # Only letters/roman numerals are typed ((a), (b) under a sentence): the
+    # paragraphs are the main points. Without bullets on the slide they are
+    # numbered 1., 2., 3. so the letters nest under them as a real list; on a
+    # slide with bullets they're bullets, and the letters sit under their
+    # paragraph as typed text.
+    lettered = real_list and not numbered_slide
+    number_all = lettered and not has_bullets
     if not texts or (has_bullets and (numbered_slide or not nest_bullets)):
         return blocks
     out: list[Block] = []
     last_item: Block | None = None    # most recent typed list item
     point: Block | None = None        # most recent plain point
     plain_points: set[int] = set()
+    to_number: list[Block] = []       # main points to number 1., 2., 3. (number_all)
     shift = 0                         # how far the slide's own bullets move in
     lead = False                      # inside an all-bold line's group
     for b in blocks:
@@ -456,9 +466,12 @@ def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) 
             last_item = point = None
             shift, lead = 0, False
             continue
-        if numbered_slide and marker_of(b.text):
+        if (numbered_slide or lettered) and marker_of(b.text):
+            if lettered and has_bullets:
+                b.level = max(b.level, shift)   # under the paragraph above it
             out.append(b)
             last_item, point = b, None
+            lead = False                        # the next paragraph is a main point again
             continue
         if (last_item is not None and _carries_on(last_item, b)
                 and indent_of(b) <= indent_of(last_item) + _INDENT_STEP):
@@ -475,8 +488,15 @@ def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) 
             out.append(b)
             last_item = None
             continue
+        if number_all and point is not None and last_item is None and point.text.rstrip().endswith(":"):
+            # "Section 12(2), MCA:" and the sentence under it are one point
+            _append(point, b)
+            continue
         if numbered_slide:
             plain_points.add(id(b))
+        elif number_all:
+            if not b.text.lstrip().startswith("*"):   # a footnote ("* RECALL: …") stays plain
+                to_number.append(b)
         elif point is not None and _DASH_START.match(b.text):
             # "- Note that …" typed with a dash: a sub-point of the one above
             b.runs = _strip_marker(b.runs, _DASH_START.match(b.text).group(0))
@@ -492,15 +512,18 @@ def bulletise_slide(blocks: list[Block], indent_of, nest_bullets: bool = False) 
                 level, lead = 0, False
             else:
                 level = 1 if lead else 0
-            b.kind, b.level = "bullet", level
+            b.kind, b.level, b.main_point = "bullet", level, True
             b.note = (b.note + "; " if b.note else "") + "slide paragraph -> bullet"
             shift = level + 1
         out.append(b)
         point, last_item = b, None
 
+    for n, b in enumerate(to_number, start=1):
+        b.runs = [Run(f"{n}. ")] + b.runs
+        b.note = (b.note + "; " if b.note else "") + f"main point on a slide with a lettered list, numbered {n}."
     # Number the points that introduce a lettered/roman list
     n = 0
-    for i, b in enumerate(out):
+    for i, b in enumerate(out if numbered_slide else []):
         nxt = out[i + 1] if i + 1 < len(out) else None
         m = marker_of(nxt.text) if nxt is not None and nxt.kind == "paragraph" else None
         is_point = (b.kind == "bullet" and not b.numbered) or id(b) in plain_points

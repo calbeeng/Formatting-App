@@ -284,3 +284,24 @@ def test_outline_document_is_one_numbered_list():
     from notes2gdoc.gdocs import writer
     texts = [seg for kind, seg in writer.segments([b for b in doc.blocks if b.selected]) if kind == "text"]
     assert sum(1 for seg in texts if any(b.numbered for b in seg)) == 1
+
+
+def test_slide_with_lettered_list_numbers_every_main_point():
+    # No bullets on the slide, only (a)/(b) typed: the paragraphs are 1., 2.
+    blocks = [P("Section 12(1), MCA:"), P("(a) where the power relates only to property –"), P("(b) in any other case –"),
+              P("Section 12(2), MCA:"), P("A person who is an undischarged bankrupt may not be appointed.")]
+    out = convert(*bulletise_slide(blocks, lambda b: 0), pdf=True)
+    assert [(b.level, b.text) for b in out] == [
+        (0, "Section 12(1), MCA:"), (1, "where the power relates only to property –"), (1, "in any other case –"),
+        (0, "Section 12(2), MCA: A person who is an undischarged bankrupt may not be appointed.")]
+    assert list(display_labels(out).values()) == ["1.", "a.", "b.", "2."]
+
+
+def test_slide_with_bullets_and_letters_gets_bulleted_paragraphs():
+    own = Block("bullet", [Run("Yeo Pei Chern v Isa Seow")])
+    blocks = [P("“Location does not determine the validity”"), own, P("Essential elements :"),
+              P("a. A male party"), P("b. A female party"), P("In the Affidavit, highlight these elements.")]
+    out = convert(*bulletise_slide(blocks, lambda b: 0, nest_bullets=True), pdf=True)
+    assert [(b.kind, b.level) for b in out] == [
+        ("bullet", 0), ("bullet", 1), ("bullet", 0), ("paragraph", 1), ("paragraph", 1), ("bullet", 0)]
+    assert out[3].hanging and out[3].text == "a. A male party"       # typed letters under their paragraph

@@ -127,6 +127,9 @@ class Block:
     # a table): its number stays as text, but it's laid out like a list item,
     # hanging at list level `level` (0 = top).
     hanging: bool = False
+    # A bullet made from a slide paragraph (a main point), as opposed to one
+    # of the slide's own bullets: it never nests under a typed list item.
+    main_point: bool = False
 
     @property
     def text(self) -> str:
