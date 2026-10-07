@@ -343,27 +343,45 @@ def _convert_with_inside(seq: list[Block], in_cell: bool) -> None:
                 after_heading.add(id(b))
             seen_heading = False
     _convert_run(items, in_cell, after_heading)
+
+    def nest(b: Block, under: Block) -> None:
+        if b.kind == "bullet":
+            b.level = under.level + 1 + b.level   # stays a bullet, nested under its item
+        elif b.level == 0:
+            b.level = under.level + 1             # text belonging to the item above
+        else:
+            b.level = under.level + 1 + max(0, b.level - 1)
+        b.note = (b.note + "; " if b.note else "") + "inside the numbered list above"
+
     last: Block | None = None
+    nested: set[tuple[str, int]] = set()   # (kind, level in the source) of what sits inside this list
+    trailing = True                        # still directly under the list's last item
     for i, b in enumerate(seq):
         if b.numbered:
-            last = b
+            if b.list_start:
+                nested = set()
+            last, trailing = b, True
             continue
         # (a stray numbered line that didn't join the list counts as text in it)
         nxt = next((x for x in seq[i + 1:] if x.numbered), None)
-        if last is None or nxt is None or not nxt.numbered or nxt.list_start or nxt.numbered != last.numbered:
+        if last is None:
+            continue
+        if nxt is None:
+            # After the list's last item: bullets and indented text like those
+            # under the earlier items belong to it in the same way
+            trailing = trailing and _is_inside(b) and (b.kind, b.level) in nested
+            if trailing:
+                nest(b, last)
+            continue
+        if nxt.list_start or nxt.numbered != last.numbered:
             continue
         b.in_list = True
         if b.kind == "heading" or b.spacer:
             # the list carries on after it; the heading itself is untouched
             b.note = (b.note + "; " if b.note else "") + "numbered list continues after this"
             continue
-        if b.kind == "bullet":
-            b.level = last.level + 1 + b.level   # stays a bullet, nested under its item
-        elif b.level == 0:
-            b.level = last.level + 1             # text belonging to the item above
-        else:
-            b.level = last.level + 1 + max(0, b.level - 1)
-        b.note = (b.note + "; " if b.note else "") + "inside the numbered list above"
+        nested.add((b.kind, b.level))
+        nest(b, last)
 
 
 def display_labels(blocks: list[Block]) -> dict[int, str]:

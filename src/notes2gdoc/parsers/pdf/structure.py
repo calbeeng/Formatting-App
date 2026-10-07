@@ -238,15 +238,48 @@ def hanging_wrap(open_: OpenBlock, line: Line) -> bool:
     return 0 < dy <= 3 * line.size and aligned
 
 
-def wraps_onto(open_: OpenBlock, line: Line) -> bool:
-    """Same-page continuation test: close below, at the block's text indent."""
+def line_pitch(lines: list[Line]) -> float:
+    """The document's usual distance between one line and the next, as a
+    multiple of the font size (about 1.2 single-spaced, 1.8 at "1.5 lines")."""
+    ratios = []
+    for prev, ln in zip(lines, lines[1:]):
+        if prev.blank or ln.blank or prev.page != ln.page:
+            continue
+        dy = ln.y0 - prev.y0
+        if 0 < dy <= 3 * ln.size:
+            ratios.append(dy / ln.size)
+    return _percentile(ratios, 0.5) if ratios else 0.0
+
+
+def _fills_line(prev: Line, line: Line, right_edge: float) -> bool:
+    """Did `prev` run to the right margin, so that `line`'s first word had to
+    go on a new line?"""
+    first = line.text.split()[0] if line.text.split() else ""
+    return prev.x1 + (len(first) + 1) * 0.45 * line.size >= right_edge
+
+
+def wraps_onto(open_: OpenBlock, line: Line, right_edge: float = 0.0, pitch: float = 0.0) -> bool:
+    """Same-page continuation test: close below, at the block's text indent.
+
+    `pitch` (see line_pitch): in a document typed with wide line spacing, a
+    wrapped line is as far below as a new item would be. There a line counts
+    as wrapped when it sits at the text indent and the line above ran to the
+    right margin (`right_edge`)."""
     if line.in_box != open_.last.in_box or is_new_item(open_, line):
         return False
     if hanging_wrap(open_, line):
         return True
     dy = line.y0 - open_.last.y0
-    if dy <= 0 or dy > WRAP_SPACING * max(line.size, open_.last.size):
+    if dy <= 0:
         return False
+    if dy > WRAP_SPACING * max(line.size, open_.last.size):
+        return (
+            pitch > WRAP_SPACING
+            and dy <= 1.15 * pitch * max(line.size, open_.last.size)
+            and abs(line.x0 - open_.text_x) <= INDENT_TOLERANCE
+            and abs(line.size - open_.last.size) <= 1
+            and _fills_line(open_.last, line, right_edge)
+        )
     if abs(line.x0 - open_.text_x) <= INDENT_TOLERANCE:
         return True
     # Paragraph with a first-line indent: the 2nd line starts further left.
@@ -274,6 +307,7 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
     all_lines = [ln for page in pages for ln in page if isinstance(ln, Line)]
     bullet_levels = cluster_positions([ln.level_x for ln in all_lines if ln.bullet])
     right_edge = _percentile([ln.x1 for ln in all_lines if not ln.blank], 0.9)
+    pitch = line_pitch(all_lines)
     body_top = _body_top(pages)
 
     blocks: list[Block] = []
@@ -318,6 +352,7 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
                     and open_.block.kind in ("bullet", "paragraph")
                     and not line.bullet
                     and not _is_heading_line(line)
+                    and not is_new_item(open_, line)   # "(a) …" at the top of a page is its own item
                     and abs(line.x0 - open_.text_x) <= INDENT_TOLERANCE
                     and line.y0 - body_top <= PAGE_TOP_SLACK * line.size
                     and (not re.search(r"[.;!?]$", open_.block.text.rstrip()) or text[:1].islower())
@@ -331,7 +366,7 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
 
             # --- "– 2101]": a dash at the text indent of the open block is a
             # wrapped continuation, not a dash bullet. Put the dash back.
-            if line.bullet in DASH_BULLETS and open_ and wraps_onto(open_, line):
+            if line.bullet in DASH_BULLETS and open_ and wraps_onto(open_, line, right_edge, pitch):
                 line.pieces = line.pieces_with_glyph
                 line.bullet = None
 
@@ -386,7 +421,7 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
                 continue
 
             # --- Continuation on the same page ---------------------------------
-            if open_ and wraps_onto(open_, line):
+            if open_ and wraps_onto(open_, line, right_edge, pitch):
                 kind = open_.block.kind
                 # A wrapped heading line must also be bold; plain text right
                 # under a heading is a new paragraph.
@@ -411,6 +446,8 @@ def build_document_blocks(pages: list[list]) -> list[Block]:
                 tail_of = None
             if line.in_box:
                 block.note = "inside a bordered box"
+            if starts_list_item(line):
+                seen_structure = True   # a list has begun: the title block is over
             if not seen_structure and page_idx == 0 and _is_centred(line):
                 block.selected = False
                 block.note = "title block (unticked by default)"
