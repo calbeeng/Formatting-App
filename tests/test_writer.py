@@ -487,3 +487,74 @@ def test_typed_numbers_hang_like_a_list():
     assert (st["indentFirstLine"]["magnitude"], st["indentStart"]["magnitude"]) == (18, 36)
     st = pa["paragraphStyle"]
     assert (st["indentFirstLine"]["magnitude"], st["indentStart"]["magnitude"]) == (54, 72)
+
+
+def test_bullets_inside_a_numbered_list_leave_it_numbered():
+    # Checked against the real Google Docs: applying the bullet style to
+    # paragraphs still in the numbered list turns the whole list into bullets
+    # and leaves their tabs in the text
+    num = "NUMBERED_DECIMAL_ALPHA_ROMAN"
+    blocks = [
+        Block("bullet", [Run("A plain bullet before the list")]),
+        Block("bullet", [Run("Market risks")], numbered=num),
+        Block("bullet", [Run("systematic risk")], level=1, in_list=True),
+        Block("bullet", [Run("diversifiable")], level=2, in_list=True),
+        Block("bullet", [Run("Credit risks")], numbered=num),
+        Block("bullet", [Run("non-payment")], level=1, in_list=True),
+        Block("bullet", [Run("Liquidity risks")], numbered=num),
+    ]
+    doc, _ = append(blocks)
+    data = doc.to_json()
+    ps = {"".join(e["textRun"]["content"] for e in el["paragraph"]["elements"]).rstrip("\n"): el["paragraph"]
+          for el in data["body"]["content"] if "paragraph" in el}
+    assert not any(t.startswith("\t") for t in ps)
+    numbered = {ps[t]["bullet"]["listId"] for t in ("Market risks", "Credit risks", "Liquidity risks")}
+    assert len(numbered) == 1                       # one list: counts 1, 2, 3
+    glyph = data["lists"][next(iter(numbered))]["listProperties"]["nestingLevels"][0]["glyphSymbol"]
+    assert glyph not in "●○■"
+    for text, level in (("systematic risk", 1), ("diversifiable", 2), ("non-payment", 1)):
+        p = ps[text]
+        assert p["bullet"]["listId"] not in numbered
+        assert p["paragraphStyle"]["indentStart"]["magnitude"] == 36 * (level + 1)
+
+
+# --------------------------------------------------------------------------- #
+# Tabs
+# --------------------------------------------------------------------------- #
+
+def test_append_to_a_chosen_tab():
+    from notes2gdoc.gdocs import target
+    from notes2gdoc.model import Table, TableCell
+
+    doc = FakeDoc([("Week 8 notes", "HEADING_1"), ("Old text", "NORMAL_TEXT")])
+    doc.tab_id = "t.week9"      # the fake now rejects any request not aimed at this tab
+    table = Block("table", table=Table(1, 1))
+    table.table.cells.append(TableCell(0, 0, [Block("paragraph", [Run("in a cell")])]))
+    blocks = [Block("heading", [Run("1. New")], style_key="decimal"), Block("bullet", [Run("point")], level=1), table]
+    job = AppendJob(FakeDocsService(doc), "doc", Settings(), PlaceholderImageHost(), sleep=lambda *_: None,
+                    tab_id="t.week9")
+    result = job.run(blocks)
+    texts = [p[2] for p in paras(doc)]
+    assert texts[:2] == ["Week 8 notes", "Old text"] and "1. New" in texts and "point" in texts
+    assert "t.week9" in json.dumps(result.batches)
+    # reading the doc's tabs back: an (empty) first tab with ours inside it
+    tabs = target.doc_tabs(doc.to_json(tabs=True))
+    assert [(t.tab_id, t.depth) for t in tabs] == [("t.0", 0), ("t.week9", 1)]
+    assert [h.text for h in tabs[1].headings] == ["Week 8 notes", "1. New"]
+
+
+def test_missing_tab_is_a_plain_error():
+    from notes2gdoc.gdocs import AppendError
+
+    job = AppendJob(FakeDocsService(FakeDoc()), "doc", Settings(), PlaceholderImageHost(), sleep=lambda *_: None,
+                    tab_id="t.gone")
+    with pytest.raises(AppendError):
+        job.run([Block("paragraph", [Run("x")])])
+
+
+def test_tab_from_link():
+    from notes2gdoc.gdocs import doc_url, tab_id_from_url
+
+    assert tab_id_from_url("https://docs.google.com/document/d/abc/edit?tab=t.x1y2#heading=h.1") == "t.x1y2"
+    assert tab_id_from_url("https://docs.google.com/document/d/abc/edit") is None
+    assert doc_url("abc", "t.x1y2").endswith("/abc/edit?tab=t.x1y2")

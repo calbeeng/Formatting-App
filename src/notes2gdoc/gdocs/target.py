@@ -25,8 +25,17 @@ def doc_id_from_url(text: str) -> str | None:
     return None
 
 
-def doc_url(doc_id: str) -> str:
-    return f"https://docs.google.com/document/d/{doc_id}/edit"
+_TAB_ID = re.compile(r"[?&#]tab=([a-zA-Z0-9._-]+)")
+
+
+def tab_id_from_url(text: str) -> str | None:
+    """The tab a Google Doc link points at ("…/edit?tab=t.abc123"), if any."""
+    m = _TAB_ID.search(text or "")
+    return m.group(1) if m else None
+
+
+def doc_url(doc_id: str, tab_id: str | None = None) -> str:
+    return f"https://docs.google.com/document/d/{doc_id}/edit" + (f"?tab={tab_id}" if tab_id else "")
 
 
 @dataclass
@@ -88,6 +97,43 @@ def headings(doc: dict) -> list[DocHeading]:
         if text:
             out.append(DocHeading(text, level, c["startIndex"]))
     return out
+
+
+@dataclass
+class DocTab:
+    """One tab of the doc (tabs can sit inside other tabs: `depth`)."""
+
+    tab_id: str
+    title: str
+    depth: int
+    headings: list[DocHeading]
+
+
+def _walk_tabs(tabs: list[dict], depth: int = 0):
+    for t in tabs:
+        yield t, depth
+        yield from _walk_tabs(t.get("childTabs", []), depth + 1)
+
+
+def doc_tabs(doc: dict) -> list[DocTab]:
+    """Every tab, in the order Google Docs lists them. `doc` must have been
+    fetched with includeTabsContent=True."""
+    out = []
+    for t, depth in _walk_tabs(doc.get("tabs", [])):
+        props = t.get("tabProperties", {})
+        if "documentTab" in t and props.get("tabId"):
+            out.append(DocTab(props["tabId"], props.get("title") or "Untitled tab", depth,
+                              headings(t["documentTab"])))
+    return out
+
+
+def tab_view(doc: dict, tab_id: str) -> dict | None:
+    """That tab's content, shaped like a whole one-tab document (body, lists,
+    documentStyle), so everything else here can read it the same way."""
+    for t, _ in _walk_tabs(doc.get("tabs", [])):
+        if t.get("tabProperties", {}).get("tabId") == tab_id and "documentTab" in t:
+            return {"documentId": doc.get("documentId"), "title": doc.get("title"), **t["documentTab"]}
+    return None
 
 
 # Map of the first-level glyph Google Docs shows -> the preset that produces it.

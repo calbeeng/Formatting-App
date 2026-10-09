@@ -99,6 +99,20 @@ def _insert(index: int, text: str) -> dict:
     return {"insertText": {"location": {"index": index}, "text": text}}
 
 
+def in_tab(value, tab_id: str):
+    """A copy of some requests with every position in them pointed at one tab
+    of the doc: each location ({"index": …}) and range ({"startIndex": …,
+    "endIndex": …}) gets that tab's ID."""
+    if isinstance(value, list):
+        return [in_tab(v, tab_id) for v in value]
+    if not isinstance(value, dict):
+        return value
+    out = {k: in_tab(v, tab_id) for k, v in value.items()}
+    if "index" in value or ("startIndex" in value and "endIndex" in value):
+        out["tabId"] = tab_id
+    return out
+
+
 def _is_retryable(exc: Exception) -> bool:
     status = getattr(getattr(exc, "resp", None), "status", None)
     return status in (429, 500, 502, 503, 504)
@@ -106,9 +120,10 @@ def _is_retryable(exc: Exception) -> bool:
 
 class AppendJob:
     def __init__(self, docs_service, doc_id: str, settings: Settings, image_host,
-                 progress: ProgressFn | None = None, sleep=time.sleep):
+                 progress: ProgressFn | None = None, sleep=time.sleep, tab_id: str | None = None):
         self.docs = docs_service
         self.doc_id = doc_id
+        self.tab_id = tab_id          # which tab to write to (None = the doc's first tab)
         self.settings = settings
         self.images = image_host
         self.progress = progress or (lambda *_: None)
@@ -130,11 +145,19 @@ class AppendJob:
                 raise
 
     def _get(self) -> dict:
-        return self._call(self.docs.documents().get(documentId=self.doc_id))
+        if not self.tab_id:
+            return self._call(self.docs.documents().get(documentId=self.doc_id))
+        doc = self._call(self.docs.documents().get(documentId=self.doc_id, includeTabsContent=True))
+        view = target.tab_view(doc, self.tab_id)
+        if view is None:
+            raise AppendError("That tab is no longer in the Google Doc. Reload the doc (↻) and pick a tab again.")
+        return view
 
     def _batch(self, requests: list[dict]) -> None:
         if not requests:
             return
+        if self.tab_id:
+            requests = in_tab(requests, self.tab_id)
         self.result.batches.append(requests)
         self._call(self.docs.documents().batchUpdate(documentId=self.doc_id, body={"requests": requests}))
 

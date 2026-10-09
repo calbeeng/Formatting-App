@@ -67,8 +67,10 @@ it → **Pin to Start** or **Send to → Desktop** for a shortcut.
    heading unticks everything under it), or use **Pages … to …**. The preview
    on the right shows exactly what will be added.
 3. Paste your Google Doc's link at the bottom, or pick one of your recent docs.
-4. **Insert at:** the end of the document, or the end of a chosen heading's section.
-5. Click **Append**.
+4. **Tab:** if the Google Doc has tabs, pick the tab the notes should go into.
+   (A link copied while a tab is open picks that tab for you.)
+5. **Insert at:** the end of the document, or the end of a chosen heading's section.
+6. Click **Append**.
 
 **Settings…** lets you choose which Google Docs style each kind of heading uses
 (e.g. "(a)" headings as Heading 3), and switch justified text and colour on or off.

@@ -7,6 +7,7 @@
     │ │ Pages 1 to 13          │ │                                    │ │
     │ └────────────────────────┘ └────────────────────────────────────┘ │
     │ Google Doc: [recent docs / paste link ▾] [↻]  ✓ My notes          │
+    │ Tab:        [Week 9 ▾]                                            │
     │ Insert at:  [End of the document ▾]        [Dry run] [Append 57]  │
     └───────────────────────────────────────────────────────────────────┘
 
@@ -117,6 +118,7 @@ class MainWindow(QMainWindow):
         self.doc_path: Path | None = None
         self.doc_info = None          # gdocs.DocInfo of the chosen Google Doc
         self._loading_doc_id = None
+        self._tab_doc_id = None       # the doc whose tabs are listed
         self._tasks: list[_Task] = []
         self._creds = None
 
@@ -209,6 +211,10 @@ class MainWindow(QMainWindow):
         self.reload_btn.setToolTip("Reload this doc's headings")
         self.reload_btn.clicked.connect(lambda: self._doc_changed(force=True))
         self.doc_status = QLabel()
+        self.tab_combo = QComboBox()
+        self.tab_combo.setToolTip("Which tab of the Google Doc to add the notes to")
+        self.tab_combo.setEnabled(False)
+        self.tab_combo.currentIndexChanged.connect(self._tab_changed)
         self.insert_combo = QComboBox()
         self.insert_combo.addItem(END_OF_DOC, None)
         self.insert_combo.setToolTip("Pick a heading to add the notes at the end of that heading’s section")
@@ -225,10 +231,12 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.doc_combo, 0, 1)
         grid.addWidget(self.reload_btn, 0, 2)
         grid.addWidget(self.doc_status, 0, 3, 1, 2)
-        grid.addWidget(QLabel("Insert at:"), 1, 0)
-        grid.addWidget(self.insert_combo, 1, 1, 1, 2)
-        grid.addWidget(self.dry_run, 1, 3)
-        grid.addWidget(self.append_btn, 1, 4)
+        grid.addWidget(QLabel("Tab:"), 1, 0)
+        grid.addWidget(self.tab_combo, 1, 1, 1, 2)
+        grid.addWidget(QLabel("Insert at:"), 2, 0)
+        grid.addWidget(self.insert_combo, 2, 1, 1, 2)
+        grid.addWidget(self.dry_run, 2, 3)
+        grid.addWidget(self.append_btn, 2, 4)
         grid.setColumnStretch(1, 1)
 
         line = QFrame()
@@ -466,7 +474,7 @@ class MainWindow(QMainWindow):
         doc_id = gdocs.doc_id_from_url(self._current_doc_url())
         if not doc_id:
             self.doc_info = None
-            self._fill_insert_combo([])
+            self._fill_tab_combo([])
             text = self.doc_combo.currentText().strip()
             self._set_doc_status("⚠ That isn’t a Google Doc link" if text else "", "#B3261E")
             return
@@ -485,12 +493,12 @@ class MainWindow(QMainWindow):
         self._loading_doc_id = None
         self.doc_info = info
         self._set_doc_status(f"✓ {info.title}", "#137333")
-        self._fill_insert_combo(info.headings)
+        self._fill_tab_combo(info.tabs)
 
     def _doc_failed(self, message):
         self._loading_doc_id = None
         self.doc_info = None
-        self._fill_insert_combo([])
+        self._fill_tab_combo([])
         self._set_doc_status("⚠ Can’t open this doc", "#B3261E")
         self.doc_status.setToolTip(message)
 
@@ -498,6 +506,31 @@ class MainWindow(QMainWindow):
         self.doc_status.setText(text)
         self.doc_status.setToolTip("")
         self.doc_status.setStyleSheet(f"color: {colour};")
+
+    def _fill_tab_combo(self, tabs):
+        """List the doc's tabs, keeping the tab that was chosen before (or, for
+        a newly chosen doc, the tab its link points at)."""
+        from .. import gdocs
+
+        previous = self.tab_combo.currentData()
+        wanted = previous.tab_id if previous is not None else None
+        doc_id = self.doc_info.doc_id if self.doc_info is not None else None
+        if doc_id != self._tab_doc_id:
+            wanted = gdocs.tab_id_from_url(self._current_doc_url())
+        self._tab_doc_id = doc_id
+        self.tab_combo.blockSignals(True)
+        self.tab_combo.clear()
+        for t in tabs:
+            self.tab_combo.addItem("    " * t.depth + t.title, t)
+        if tabs:
+            self.tab_combo.setCurrentIndex(next((i for i, t in enumerate(tabs) if t.tab_id == wanted), 0))
+        self.tab_combo.setEnabled(len(tabs) > 1)
+        self.tab_combo.blockSignals(False)
+        self._tab_changed()
+
+    def _tab_changed(self, *_):
+        tab = self.tab_combo.currentData()
+        self._fill_insert_combo(tab.headings if tab is not None else [])
 
     def _fill_insert_combo(self, headings):
         previous = self.insert_combo.currentData()
@@ -538,6 +571,12 @@ class MainWindow(QMainWindow):
         settings = self.settings
         settings.strip_colour = self.strip_colour.isChecked()
         after = self.insert_combo.currentData()
+        tab = self.tab_combo.currentData()
+        # (with a single tab, write to the doc as before)
+        tab_id = tab.tab_id if tab is not None and self.tab_combo.count() > 1 else None
+        tab_title = tab.title if tab_id else ""
+        if doc_id and tab_id:
+            url = gdocs.doc_url(doc_id, tab_id)   # remembered with its tab for next time
         if doc_id:
             settings.last_doc_url = url
             settings.save()
@@ -549,10 +588,12 @@ class MainWindow(QMainWindow):
             if not out:
                 return
             def work(progress):
-                return gdocs.dry_run(document, doc_id or "", settings, out, creds, progress, after), out, url
+                return (gdocs.dry_run(document, doc_id or "", settings, out, creds, progress, after, tab_id),
+                        out, url, tab_id, tab_title)
         else:
             def work(progress):
-                return gdocs.append_document(document, doc_id, settings, creds, progress, after), None, url
+                return (gdocs.append_document(document, doc_id, settings, creds, progress, after, tab_id),
+                        None, url, tab_id, tab_title)
 
         self.append_btn.setEnabled(False)
         self.progress.setRange(0, 0)  # busy until the first progress update
@@ -568,7 +609,7 @@ class MainWindow(QMainWindow):
     def _appended(self, outcome):
         from .. import gdocs
 
-        result, dry_run_file, url = outcome
+        result, dry_run_file, url, tab_id, tab_title = outcome
         self.append_btn.setEnabled(True)
         self.progress.hide()
         if dry_run_file:
@@ -583,13 +624,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Appended to “{title}”")
         box = QMessageBox(self)
         box.setWindowTitle("Done")
-        box.setText(f"Your notes were added to “{title}”.\n\n"
+        box.setText(f"Your notes were added to “{title}”" + (f", in the tab “{tab_title}”" if tab_title else "")
+                    + ".\n\n"
                     + ("At the end of the document." if where == END_OF_DOC else where.replace("  ", " ") + "."))
         open_btn = box.addButton("Open the doc", QMessageBox.AcceptRole)
         box.addButton("Close", QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is open_btn:
-            QDesktopServices.openUrl(QUrl(gdocs.doc_url(result.doc_id)))
+            QDesktopServices.openUrl(QUrl(gdocs.doc_url(result.doc_id, tab_id)))
         self._doc_changed(force=True)  # headings changed
 
     def _append_failed(self, message: str):
