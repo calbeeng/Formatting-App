@@ -13,7 +13,7 @@ import sys
 from PyInstaller.utils.hooks import collect_data_files
 
 APP_NAME = "Notes to Google Docs"
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 
 datas = [
     ("src/notes2gdoc/resources/icon.png", "notes2gdoc/resources"),
