@@ -51,13 +51,15 @@ def test_bullet_between_items_stays_a_bullet_inside_the_list():
     assert b[1].in_list and b[1].kind == "bullet" and b[1].level == 1
     assert list(display_labels(b).values()) == ["1.", "2."]
     # In the doc: the two items share one numbered list, so "2." follows "1.";
-    # the bullet between them is a bulleted list of its own, nested one level in
+    # the bullet between them is a bulleted list of its own, indented one
+    # level in (as its own list it's that list's top level, as in the real Docs)
     doc, _ = append(b)
     ps = paras(doc)[3:]
     assert [(p[1], p[2]) for p in ps] == [
-        (0, "To avoid doubt"), (1, "The Court of Appeal ruled ..."), (0, "Take detailed attendance notes")]
+        (0, "To avoid doubt"), (0, "The Court of Appeal ruled ..."), (0, "Take detailed attendance notes")]
     lists = [p["paragraph"].get("bullet", {}).get("listId") for p in _body(doc)[-3:]]
     assert lists[0] == lists[2] and lists[1] not in (None, lists[0])
+    assert _body(doc)[-2]["paragraph"]["paragraphStyle"]["indentStart"]["magnitude"] == 72
 
 
 def test_list_carries_on_past_headings_and_text():

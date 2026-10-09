@@ -62,6 +62,9 @@ class FakeDoc:
         self.inline_objects: dict[str, dict] = {}
         self._ids = itertools.count(1)
         self.batches: list[list[dict]] = []
+        # Set to imitate writing to one tab of a doc with tabs: the content is
+        # then that tab's, and every request must name it
+        self.tab_id: str | None = None
 
     @classmethod
     def with_end_state(cls, end_index: int, last_para_empty: bool) -> "FakeDoc":
@@ -139,7 +142,21 @@ class FakeDoc:
                 raise FakeDocsError(f"Unsupported request {kind}")
             if kind in ("deleteContentRange", "replaceAllText"):
                 raise FakeDocsError("Destructive request")
+            self._check_tab(body)
             handler(body)
+
+    def _check_tab(self, value) -> None:
+        """Every location and range must point at the tab being written to
+        (without a tab ID the real API writes to the doc's first tab)."""
+        if isinstance(value, list):
+            for v in value:
+                self._check_tab(v)
+        elif isinstance(value, dict):
+            is_position = "index" in value or ("startIndex" in value and "endIndex" in value)
+            if is_position and value.get("tabId") != self.tab_id:
+                raise FakeDocsError(f"Request for tab {value.get('tabId')!r}, expected {self.tab_id!r}")
+            for v in value.values():
+                self._check_tab(v)
 
     def _insertText(self, b):
         index = b["location"]["index"]
@@ -177,8 +194,15 @@ class FakeDoc:
         ps, pe = self._check_range(b["range"])
         list_id = f"list{next(self._ids)}"
         self.lists[list_id] = {"listProperties": {"nestingLevels": [
-            {"glyphSymbol": PRESET_GLYPHS.get(b["bulletPreset"], "●")}]}}
+            {"glyphSymbol": PRESET_GLYPHS.get(b["bulletPreset"], "1." if b["bulletPreset"].startswith("NUMBERED") else "●")}]}}
         for start, nl in reversed(self._paragraphs_in(ps, pe)):
+            old = self.seq[nl].bullet
+            if old:
+                # Like the real Docs: a paragraph already in a list stays in
+                # it, at its level and with its tabs; the *whole* list takes
+                # on the new style instead
+                self.lists[old["listId"]] = copy.deepcopy(self.lists[list_id])
+                continue
             tabs = 0
             while self.seq[start + tabs].c == "\t":
                 tabs += 1
@@ -260,11 +284,11 @@ class FakeDoc:
     # ------------------------------------------------------------------ #
     # documents.get()
     # ------------------------------------------------------------------ #
-    def to_json(self) -> dict:
+    def to_json(self, tabs: bool = False) -> dict:
+        """`tabs`: in the shape documents.get(includeTabsContent=True) returns
+        (with `tab_id` set, the content sits in a tab inside an empty first tab)."""
         content, i = self._elements(0, set())
-        return {
-            "documentId": self.document_id,
-            "title": self.title,
+        inner = {
             "body": {"content": [{"startIndex": 0, "endIndex": 1, "sectionBreak": {}}] + content},
             "lists": copy.deepcopy(self.lists),
             "documentStyle": {
@@ -272,6 +296,18 @@ class FakeDoc:
                 "marginLeft": {"magnitude": 72, "unit": "PT"}, "marginRight": {"magnitude": 72, "unit": "PT"},
             },
         }
+        if not tabs:
+            return {"documentId": self.document_id, "title": self.title, **inner}
+        mine = {"tabProperties": {"tabId": self.tab_id or "t.0", "title": "Notes"}, "documentTab": inner}
+        if not self.tab_id:
+            return {"documentId": self.document_id, "title": self.title, "tabs": [mine]}
+        empty = {"body": {"content": [
+            {"startIndex": 0, "endIndex": 1, "sectionBreak": {}},
+            {"startIndex": 1, "endIndex": 2, "paragraph": {
+                "elements": [{"startIndex": 1, "endIndex": 2, "textRun": {"content": "\n", "textStyle": {}}}],
+                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"}}}]}}
+        first = {"tabProperties": {"tabId": "t.0", "title": "Tab 1"}, "documentTab": empty, "childTabs": [mine]}
+        return {"documentId": self.document_id, "title": self.title, "tabs": [first]}
 
     def _elements(self, i: int, stop: set) -> tuple[list[dict], int]:
         out = []
@@ -363,8 +399,8 @@ class _Documents:
     def __init__(self, doc: FakeDoc):
         self._doc = doc
 
-    def get(self, documentId: str, **_):
-        return _Call(lambda: self._doc.to_json())
+    def get(self, documentId: str, includeTabsContent: bool = False, **_):
+        return _Call(lambda: self._doc.to_json(tabs=includeTabsContent))
 
     def batchUpdate(self, documentId: str, body: dict):
         def run():

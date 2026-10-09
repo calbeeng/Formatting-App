@@ -291,11 +291,12 @@ def text_requests(
                     "paragraphStyle": {"indentStart": indent, "indentFirstLine": indent},
                     "fields": "indentStart,indentFirstLine",
                 }})
-        # Bullets inside the list become bullets again: put their tabs back
-        # (for the nesting level) and make each stretch of them a bulleted
-        # list of its own. The numbered list keeps counting around them.
-        # Last stretch first, so earlier positions stay valid; each step
-        # leaves the text the same length as before it.
+        # Bullets inside the list become bullets again: each stretch of them
+        # is taken out of the numbered list (Google Docs keeps the indent of
+        # the level it had there) and made a bulleted list of its own. The
+        # numbered list keeps counting around them.
+        # (Just applying the bullet style to them while they're still in the
+        # numbered list would turn the whole list into bullets.)
         i = last
         while i >= first:
             if not inner_bullet(i):
@@ -304,14 +305,10 @@ def text_requests(
             q = p_ = i
             while p_ - 1 >= first and inner_bullet(p_ - 1):
                 p_ -= 1
-            for k in range(q, p_ - 1, -1):
-                if tab_count(k):
-                    reqs.append({"insertText": {"location": _location(pos[k], tab_id), "text": "\t" * tab_count(k)}})
-            length = sum(len(paras[k][1]) + 1 for k in range(p_, q + 1))
-            reqs.append({"createParagraphBullets": {
-                "range": _range(pos[p_], pos[p_] + length, tab_id),
-                "bulletPreset": bullet_preset,
-            }})
+            length = sum(len(paras[k][1]) - tab_count(k) + 1 for k in range(p_, q + 1))
+            rng = _range(pos[p_], pos[p_] + length, tab_id)
+            reqs.append({"deleteParagraphBullets": {"range": rng}})
+            reqs.append({"createParagraphBullets": {"range": rng, "bulletPreset": bullet_preset}})
             i = p_ - 1
 
     tabs = sum(len(text) - len(text.lstrip("\t")) for b, text, _ in paras if b.kind == "bullet")
