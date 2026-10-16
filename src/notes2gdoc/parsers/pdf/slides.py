@@ -32,7 +32,7 @@ import re
 from dataclasses import replace
 
 from ...config import Settings
-from ...lists import bulletise_slide
+from ...lists import bulletise_slide, marker_of
 from ...model import Block, Run, merge_runs
 from .extract import DASH_BULLETS, Line
 from .layout import cluster_positions, level_for
@@ -252,9 +252,11 @@ SUBTITLE_MIN_SIZE = 0.7
 
 
 def _is_subtitle(ln: Line, title: Line) -> bool:
-    # Not in a column: a bold line atop one column is that column's heading
+    # Not in a column: a bold line atop one column is that column's heading.
+    # Not a numbered point either: "4. Changing Factor Loadings" at the top
+    # of a slide carries on the list from the slide before.
     return (not ln.bullet and ln.column == 0 and ln.bold_ratio >= 0.6 and len(ln.text.strip()) <= 120
-            and ln.size >= SUBTITLE_MIN_SIZE * title.size)
+            and ln.size >= SUBTITLE_MIN_SIZE * title.size and not marker_of(ln.text.strip()))
 
 
 def _split_title(items: list) -> tuple[list[Line], list]:

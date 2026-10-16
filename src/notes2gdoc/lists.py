@@ -356,11 +356,12 @@ def _convert_with_inside(seq: list[Block], in_cell: bool) -> None:
     last: Block | None = None
     nested: set[tuple[str, int]] = set()   # (kind, level in the source) of what sits inside this list
     trailing = True                        # still directly under the list's last item
+    trail_top = -1                         # source level of the first such bullet (-1: none yet)
     for i, b in enumerate(seq):
         if b.numbered:
             if b.list_start:
                 nested = set()
-            last, trailing = b, True
+            last, trailing, trail_top = b, True, -1
             continue
         # (a stray numbered line that didn't join the list counts as text in it)
         nxt = next((x for x in seq[i + 1:] if x.numbered), None)
@@ -368,9 +369,14 @@ def _convert_with_inside(seq: list[Block], in_cell: bool) -> None:
             continue
         if nxt is None:
             # After the list's last item: bullets and indented text like those
-            # under the earlier items belong to it in the same way
-            trailing = trailing and _is_inside(b) and (b.kind, b.level) in nested
+            # under the earlier items belong to it in the same way, and so do
+            # bullets nested deeper under those
+            src = b.level
+            trailing = trailing and _is_inside(b) and (
+                (b.kind, b.level) in nested or (b.kind == "bullet" and trail_top >= 0 and b.level > trail_top))
             if trailing:
+                if trail_top < 0:
+                    trail_top = src
                 nest(b, last)
             continue
         if nxt.list_start or nxt.numbered != last.numbered:

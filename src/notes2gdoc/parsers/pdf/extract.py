@@ -19,7 +19,7 @@ import pymupdf as fitz
 
 from ...model import Run
 from .layout import Box, Segment, analyse_drawings
-from .regions import (DiagramRegion, TableRegion, add_title_row, find_box_rows, find_diagrams,
+from .regions import (DiagramRegion, TableRegion, add_title_row, find_box_columns, find_box_rows, find_diagrams,
                       find_pictures, find_ruled_tables, find_tables)
 
 # Fonts whose characters are pictures, not letters. A line starting with one of
@@ -184,6 +184,7 @@ def extract_page(page: fitz.Page, page_index: int, repeated_images: set[int] | N
             _title_row_above(t, visible, page)
     tables += find_box_rows(page, repeated_images or set(), [_rect(sp) for sp in visible],
                             [t.rect for t in tables])
+    tables += find_box_columns(page, drawings, [_rect(sp) for sp in visible], [t.rect for t in tables])
     diagrams = find_diagrams(page, drawings, [_rect(sp) for sp in visible], [t.rect for t in tables])
     diagrams += find_pictures(page, repeated_images or set(), [r.rect for r in [*tables, *diagrams]],
                               [_rect(sp) for sp in visible])

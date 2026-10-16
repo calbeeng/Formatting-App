@@ -502,3 +502,91 @@ def find_box_rows(page: fitz.Page, skip: set[int], text_rects: list[fitz.Rect],
         cells = [CellSpec(0, c, fitz.Rect(o)) for c, o in enumerate(row)]
         out.append(TableRegion(rect, 1, len(row), cells, [1.0] * len(row)))
     return out
+
+
+# Box columns: how far apart (points) edges may be and still line up
+BOX_ALIGN = 4
+# ...and the smallest share of the page's width and height a column takes
+BOX_MIN_SHARE = 0.25
+
+
+def find_box_columns(page: fitz.Page, drawings: list[dict], text_rects: list[fitz.Rect],
+                     exclude: list[fitz.Rect]) -> list[TableRegion]:
+    """Two or more bordered boxes side by side, each often topped by a
+    shaded heading box:
+
+        ┌ Mutual Fund ┐   ┌ Hedge Fund ┐
+        ├─────────────┤   ├────────────┤
+        │ • …         │   │ • …        │
+        └─────────────┘   └────────────┘
+
+    A comparison laid out in columns: it becomes a table, a column per box
+    stack and a row per box (heading row, then the text). The boxes in a
+    column must touch, and every column must have its boxes at the same
+    heights."""
+    area = page.rect.width * page.rect.height
+
+    def has_text(r: fitz.Rect) -> bool:
+        return any(r.contains(fitz.Point((t.x0 + t.x1) / 2, (t.y0 + t.y1) / 2)) for t in text_rects)
+
+    rects: list[fitz.Rect] = []
+    plain: set[int] = set()      # unshaded boxes (by index in `rects`)
+    for d in drawings:
+        r = fitz.Rect(d["rect"])
+        if "s" not in (d.get("type") or "") or _is_thin(r) or r.width * r.height > 0.6 * area:
+            continue
+        # a drawn rectangle, not a diagram's connector line (whose outline
+        # is a box too)
+        if not d.get("items") or any(it[0] not in ("re", "qu") for it in d["items"]):
+            continue
+        centre = fitz.Point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2)
+        if any(e.contains(centre) for e in exclude):
+            continue
+        if not any(abs(r.x0 - o.x0) < 1 and abs(r.y0 - o.y0) < 1 and abs(r.x1 - o.x1) < 1 and abs(r.y1 - o.y1) < 1
+                   for o in rects):
+            if d.get("fill") is None or _near_white(d.get("fill")):
+                plain.add(len(rects))
+            rects.append(r)
+
+    # Stack boxes into columns: same left and right edges, each box starting
+    # where the one above ends
+    columns: list[list[fitz.Rect]] = []
+    for r in sorted(rects, key=lambda r: (r.y0, r.x0)):
+        col = next((c for c in columns if abs(c[-1].x0 - r.x0) <= BOX_ALIGN and abs(c[-1].x1 - r.x1) <= BOX_ALIGN
+                    and abs(c[-1].y1 - r.y0) <= BOX_ALIGN), None)
+        if col is not None:
+            col.append(r)
+        else:
+            columns.append([r])
+    # (the text box at the bottom of a column is plain: coloured boxes with
+    # text are a diagram's, like "Company A" -> "Company B")
+    plain_rects = [rects[i] for i in plain]
+    # (and the columns are big: a quarter of the page wide and tall, not
+    # the small boxes of a flowchart)
+    columns = [c for c in columns if all(has_text(r) for r in c) and any(c[-1] is p for p in plain_rects)
+               and c[0].width >= BOX_MIN_SHARE * page.rect.width
+               and c[-1].y1 - c[0].y0 >= BOX_MIN_SHARE * page.rect.height]
+
+    out: list[TableRegion] = []
+    used: set[int] = set()
+    columns.sort(key=lambda c: c[0].x0)
+    for i, col in enumerate(columns):
+        if i in used:
+            continue
+        group = [col]
+        for j in range(i + 1, len(columns)):
+            other = columns[j]
+            if (j not in used and len(other) == len(col) and other[0].x0 >= group[-1][0].x1 - BOX_ALIGN
+                    and all(abs(a.y0 - b.y0) <= BOX_ALIGN * 2 and abs(a.y1 - b.y1) <= BOX_ALIGN * 2
+                            for a, b in zip(col, other))):
+                group.append(other)
+                used.add(j)
+        if len(group) < 2:
+            continue
+        rect = fitz.Rect(group[0][0])
+        for c in group:
+            for r in c:
+                rect |= r
+        cells = [CellSpec(row, ci, fitz.Rect(r)) for ci, c in enumerate(group) for row, r in enumerate(c)]
+        out.append(TableRegion(rect, len(col), len(group), cells, [c[0].width for c in group]))
+    return out
