@@ -33,6 +33,15 @@ PRESET_GLYPHS = {
 }
 
 
+def _units(text: str):
+    """The text as Google Docs indexes it: a character outside the basic set
+    ("𝐬", emoji) takes two positions, the second shown here as ""."""
+    for ch in text:
+        yield ch
+        if ord(ch) > 0xFFFF:
+            yield ""
+
+
 class FakeDocsError(Exception):
     """Mirrors the real API rejecting a request (HTTP 400)."""
 
@@ -55,7 +64,7 @@ class FakeDoc:
         self.title = "Scratch doc"
         self.seq: list[_Char] = []
         for text, style in paragraphs or [("", "NORMAL_TEXT")]:
-            self.seq.extend(_Char(ch) for ch in text)
+            self.seq.extend(_Char(ch) for ch in _units(text))
             self.seq.append(_Char("\n", ps={"namedStyleType": style}))
         self.lists: dict[str, dict] = {}
         self.merges: list[dict] = []
@@ -167,7 +176,7 @@ class FakeDoc:
         _, nl = self._paragraph_bounds(pos)
         ts = self.seq[pos - 1].ts if pos > 0 and self.seq[pos - 1].c not in MARKERS | {"\n"} else self.seq[pos].ts
         para = self.seq[nl]
-        new = [_Char(ch, ts, para.ps, para.bullet) for ch in text]
+        new = [_Char(ch, ts, para.ps, para.bullet) for ch in _units(text)]
         self.seq[pos:pos] = new
 
     def _updateParagraphStyle(self, b):

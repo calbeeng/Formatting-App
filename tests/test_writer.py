@@ -558,3 +558,19 @@ def test_tab_from_link():
     assert tab_id_from_url("https://docs.google.com/document/d/abc/edit?tab=t.x1y2#heading=h.1") == "t.x1y2"
     assert tab_id_from_url("https://docs.google.com/document/d/abc/edit") is None
     assert doc_url("abc", "t.x1y2").endswith("/abc/edit?tab=t.x1y2")
+
+
+def test_maths_letters_count_twice():
+    # "𝐬𝐡𝐚𝐫𝐞𝐬" (maths bold letters, as in a slide's formula) take two positions
+    # each in Google Docs; counting them once shifted every style after them
+    blocks = [
+        Block("paragraph", [Run("NAV = "), Run("𝐬𝐡𝐚𝐫𝐞𝐬", bold=True), Run(" outstanding")]),
+        Block("heading", [Run("Types of Funds")], style_key="decimal"),
+        Block("bullet", [Run("Does not "), Run("trade", bold=True), Run(" on exchanges")]),
+    ]
+    doc, _ = append(blocks)
+    ps = paras(doc)
+    nav, heading, bullet = ps[-3], ps[-2], ps[-1]
+    assert nav[0] == "NORMAL_TEXT" and [t for t, s in nav[3] if s.get("bold")] == ["𝐬𝐡𝐚𝐫𝐞𝐬"]
+    assert heading[2] == "Types of Funds" and heading[0].startswith("HEADING") and heading[1] is None
+    assert bullet[1] == 0 and [t for t, s in bullet[3] if s.get("bold")] == ["trade"]

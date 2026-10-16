@@ -63,6 +63,13 @@ def _clean(text: str) -> str:
     return _CONTROL.sub("", text.replace("\n", " ").replace("\t", " "))
 
 
+def doc_len(text: str) -> int:
+    """Length as Google Docs counts it (in UTF-16 units): characters outside
+    the basic set, such as the maths letters in "𝐬𝐡𝐚𝐫𝐞𝐬" or emoji, count as 2.
+    Every index we send must be counted this way."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def _range(start: int, end: int, tab_id: str | None) -> dict:
     r = {"startIndex": start, "endIndex": end}
     if tab_id:
@@ -130,7 +137,7 @@ def text_requests(
         for r in b.runs:
             t = _clean(r.text)
             if t:
-                runs.append((len(text), Run(t, r.bold, r.italic, r.underline, r.superscript, r.subscript,
+                runs.append((doc_len(text), Run(t, r.bold, r.italic, r.underline, r.superscript, r.subscript,
                                             r.color, r.highlight)))
                 text += t
         if b.hanging:
@@ -153,7 +160,7 @@ def text_requests(
     pos = index
     for _, text, _ in paras:
         starts.append(pos)
-        pos += len(text) + 1  # + its newline
+        pos += doc_len(text) + 1  # + its newline
     end_all = pos  # just past the last paragraph's newline (the pre-existing one)
 
     # 2. No inherited bullets (before resetting indents; see module notes)
@@ -170,7 +177,7 @@ def text_requests(
         if settings.justify_text:
             para_style["alignment"] = "JUSTIFIED"
         reqs.append({"updateParagraphStyle": {
-            "range": _range(starts[i], starts[j] + len(paras[j][1]) + 1, tab_id),
+            "range": _range(starts[i], starts[j] + doc_len(paras[j][1]) + 1, tab_id),
             "paragraphStyle": para_style,
             "fields": ",".join(["namedStyleType", *PARA_RESET_FIELDS]),
         }})
@@ -184,7 +191,7 @@ def text_requests(
     if flush_left or settings.flush_left:
         for (b, text, _), start in zip(paras, starts):
             if b.kind != "bullet" and not (b.kind == "paragraph" and (b.level > 0 or b.hanging)):
-                reqs.append(zero_indent_request(start, start + len(text) + 1, tab_id))
+                reqs.append(zero_indent_request(start, start + doc_len(text) + 1, tab_id))
 
     # Paragraphs inside a list (e.g. a quote under a bullet) are indented to
     # line up with the bullet text: one list level = LIST_INDENT_PT, the same
@@ -194,7 +201,7 @@ def text_requests(
     for (b, text, _), start in zip(paras, starts):
         if b.kind == "paragraph" and b.hanging:
             reqs.append({"updateParagraphStyle": {
-                "range": _range(start, start + len(text) + 1, tab_id),
+                "range": _range(start, start + doc_len(text) + 1, tab_id),
                 "paragraphStyle": {
                     "indentStart": {"magnitude": LIST_INDENT_PT * (b.level + 1), "unit": "PT"},
                     "indentFirstLine": {"magnitude": LIST_INDENT_PT * b.level + LIST_INDENT_PT / 2, "unit": "PT"},
@@ -205,7 +212,7 @@ def text_requests(
         if b.kind == "paragraph" and b.level > 0 and not b.hanging:
             indent = {"magnitude": LIST_INDENT_PT * b.level, "unit": "PT"}
             reqs.append({"updateParagraphStyle": {
-                "range": _range(start, start + len(text) + 1, tab_id),
+                "range": _range(start, start + doc_len(text) + 1, tab_id),
                 "paragraphStyle": {"indentStart": indent, "indentFirstLine": indent},
                 "fields": "indentStart,indentFirstLine",
             }})
@@ -213,7 +220,7 @@ def text_requests(
     # 4. Reset inherited text formatting (only where there is text)
     if body:
         reqs.append({"updateTextStyle": {
-            "range": _range(index, index + len(body), tab_id),
+            "range": _range(index, index + doc_len(body), tab_id),
             "textStyle": {},
             "fields": ",".join(TEXT_RESET_FIELDS),
         }})
@@ -227,7 +234,7 @@ def text_requests(
                 # Leave edge spaces unstyled (an underlined space looks like a stray line)
                 s = start + offset + (len(run.text) - len(run.text.lstrip(" ")))
                 reqs.append({"updateTextStyle": {
-                    "range": _range(s, s + len(core), tab_id),
+                    "range": _range(s, s + doc_len(core), tab_id),
                     "textStyle": style,
                     "fields": ",".join(fields),
                 }})
@@ -266,7 +273,7 @@ def text_requests(
             k += 1
     for first, last in reversed(groups):
         reqs.append({"createParagraphBullets": {
-            "range": _range(starts[first], starts[last] + len(paras[last][1]) + 1, tab_id),
+            "range": _range(starts[first], starts[last] + doc_len(paras[last][1]) + 1, tab_id),
             "bulletPreset": paras[first][0].numbered or bullet_preset,
         }})
         # Where each member starts once this group's leading tabs are gone
@@ -283,7 +290,7 @@ def text_requests(
         for i in range(first, last + 1):
             b, text, _ = paras[i]
             if b.kind != "bullet":
-                rng = _range(pos[i], pos[i] + len(text) + 1, tab_id)
+                rng = _range(pos[i], pos[i] + doc_len(text) + 1, tab_id)
                 indent = {"magnitude": LIST_INDENT_PT * b.level, "unit": "PT"}
                 reqs.append({"deleteParagraphBullets": {"range": rng}})
                 reqs.append({"updateParagraphStyle": {
@@ -305,14 +312,14 @@ def text_requests(
             q = p_ = i
             while p_ - 1 >= first and inner_bullet(p_ - 1):
                 p_ -= 1
-            length = sum(len(paras[k][1]) - tab_count(k) + 1 for k in range(p_, q + 1))
+            length = sum(doc_len(paras[k][1]) - tab_count(k) + 1 for k in range(p_, q + 1))
             rng = _range(pos[p_], pos[p_] + length, tab_id)
             reqs.append({"deleteParagraphBullets": {"range": rng}})
             reqs.append({"createParagraphBullets": {"range": rng, "bulletPreset": bullet_preset}})
             i = p_ - 1
 
     tabs = sum(len(text) - len(text.lstrip("\t")) for b, text, _ in paras if b.kind == "bullet")
-    return reqs, len(body) - tabs
+    return reqs, doc_len(body) - tabs
 
 
 def zero_indent_request(start: int, end: int, tab_id: str | None = None) -> dict:
